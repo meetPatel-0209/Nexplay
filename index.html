@@ -516,14 +516,21 @@ function mpLobby(){
   main.innerHTML=`<div class="sh"><div><h1 style="font-size:clamp(26px,5vw,36px)">Multiplayer</h1><p>Play with a friend — online rooms or on one device.</p></div></div>
   <div class="card pad"><div class="ctl"><label>Your name <input id="mpn" maxlength="16" value="${esc(pname())}" aria-label="Your name" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 10px;margin-left:6px;width:min(55vw,200px)"></label><span class="muted">${S.avatar} · Online record: ${rec.w}W · ${rec.l}L · ${rec.d}D</span></div></div>
   ${sec('Online rooms','Create a room, share the 5-character code, and play on two devices.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
-  <section><div class="card pad"><h3>Join a room</h3><div class="row" style="padding-top:10px"><input id="mpc" maxlength="5" placeholder="CODE" aria-label="Room code" autocomplete="off" autocapitalize="characters" style="height:48px;width:140px;text-align:center;font-size:22px;letter-spacing:.2em;font-weight:800;border-radius:12px;border:1px solid var(--bd);background:var(--card)"><button class="btn p" data-mp="join">Join room</button></div></div><p class="msg" id="mpmsg" role="status"></p></section>
+  <section><div class="card pad"><h3>Join a room</h3><div class="row" style="padding-top:10px"><input id="mpc" maxlength="5" placeholder="CODE" aria-label="Room code" autocomplete="off" autocapitalize="characters" style="height:48px;width:140px;text-align:center;font-size:22px;letter-spacing:.2em;font-weight:800;border-radius:12px;border:1px solid var(--bd);background:var(--card)"><button class="btn p" data-mp="join">Join room</button><button class="btn" data-mp="test">Test connection</button></div></div><p class="msg" id="mpmsg" role="status"></p></section>
   ${sec('Pass & play','Two players, one device — take turns.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play on this device','data-mp="local" data-g="'+k+'"')).join('')}</div>`)}
   <section><div class="card pad"><b>How online rooms work</b><p class="muted" style="margin-top:6px">Rooms live in this artifact's shared storage, so you and your friend both open this same page. The host's browser validates every move and publishes the game state; the guest can only send move requests. Expect about 1–2 seconds per move. It isn't tamper-proof, and if the host closes the page the room ends. A dedicated Socket.IO server is still the right production setup.</p></div></section>`;
   const say=m=>{const e=$('#mpmsg');if(e)e.textContent=m};
   const h=async e=>{if(main.onclick!==h||busy)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
     if(a==='local')mpLocal(x.dataset.g);
     else if(a==='create'){busy=true;say('Creating room…');await mpCreate(x.dataset.g,say);busy=false}
-    else if(a==='join'){busy=true;say('Joining…');await mpJoin($('#mpc').value,say);busy=false}};
+    else if(a==='join'){busy=true;say('Joining…');await mpJoin($('#mpc').value,say);busy=false}
+    else if(a==='test'){busy=true;say('Testing shared storage…');
+      try{if(!window.storage)throw new Error('the storage API is missing in this view');
+        const k='room:test'+pid().slice(0,4);await window.storage.set(k,JSON.stringify({t:Date.now()}),true);
+        const r=await window.storage.get(k,true);try{await window.storage.delete(k,true)}catch(e){}
+        say(r&&r.value?'✅ Shared storage works. If a friend still can\'t join, make sure they opened the same published link of this artifact.':'⚠️ Shared storage saved but could not be read back.')}
+      catch(err){say('❌ Shared storage isn\'t working here ('+(err&&err.message?err.message:'unknown error')+'). Online rooms need the published/shared artifact link. Pass & play still works.')}
+      busy=false}};
   main.onclick=h;
   main.oninput=e=>{if(e.target.id==='mpn'){const v=e.target.value.trim().slice(0,16);if(v){S.name=v;save()}}else if(e.target.id==='mpc')e.target.value=e.target.value.toUpperCase().replace(/[^A-Z2-9]/g,'').slice(0,5)};
   main.onkeydown=e=>{if(e.key==='Enter'&&e.target.id==='mpc')h({target:$('[data-mp=join]')})};
@@ -850,6 +857,133 @@ function battle(el,ctx){
   newGame();return()=>clearTimeout(tm)}
 
 setTimeout(()=>{INFO.About=`${BRAND} is a browser game hub with 16 solo and vs-AI games, plus online rooms and pass-and-play for five two-player games (Tic-Tac-Toe, Connect Four, Rock Paper Scissors, Chess and Checkers). Accounts and a dedicated game server are planned.`},0);
+
+/* ---------- multiplayer v2: timeouts, visible errors, direct device-to-device connection ---------- */
+const tmo=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]);
+async function sget(k){try{const r=await tmo(window.storage.get(k,true),4000);return r&&r.value?JSON.parse(r.value):null}catch(e){return null}}
+async function sset(k,v){try{return !!(await tmo(window.storage.set(k,JSON.stringify(v),true),4000))}catch(e){return false}}
+
+async function mpCreate(gk,say){
+  if(!MP[gk])return;say('Creating room…');let code=null;
+  for(let i=0;i<4;i++){const c=mkCode(),ex=await sget('room:'+c);if(!ex||ex.status==='closed'||Date.now()-ex.t>120000){code=c;break}}
+  const room=code&&{code,game:gk,host:{id:pid(),name:pname(),av:S.avatar},guest:null,status:'waiting',state:null,v:0,t:Date.now()};
+  if(!room||!(await sset('room:'+code,room))){toast('Shared storage unavailable — using a direct connection instead.');return mpDirectHost(gk)}
+  await sset('room:'+code+':g',{guest:null,seq:0,act:null,hb:0});
+  mpRoom({role:'host',code,gk,room})}
+
+function mpLobby(){
+  const rec=S.mp||(S.mp={w:0,l:0,d:0});let busy=false;
+  const opts=Object.keys(MP).map(k=>`<option value="${k}">${MP[k].name}</option>`).join('');
+  main.innerHTML=`<div class="sh"><div><h1 style="font-size:clamp(26px,5vw,36px)">Multiplayer</h1><p>Play with a friend on another device — or share one device.</p></div></div>
+  <div class="card pad"><div class="ctl"><label>Your name <input id="mpn" maxlength="16" value="${esc(pname())}" aria-label="Your name" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 10px;margin-left:6px;width:min(55vw,200px)"></label><span class="muted">${S.avatar} · Online record: ${rec.w}W · ${rec.l}L · ${rec.d}D</span></div></div>
+  ${sec('Direct connection (recommended)','Connects two devices straight to each other — no server or shared storage. You swap two short codes by message.',`<div class="card pad"><div class="row" style="padding:0"><label>Game <select id="dg" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 8px;margin-left:6px">${opts}</select></label><button class="btn p" data-mp="dhost">Host a game</button><button class="btn" data-mp="djoin">Join with invite code</button></div><p class="muted" style="margin-top:10px">Works across networks in most cases. If it can't connect, put both devices on the same Wi-Fi.</p></div>`)}
+  ${sec('Online rooms (room code)','Needs this artifact\'s shared storage and both players on the same published link. If storage isn\'t available, Create room switches to a direct connection automatically.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
+  <section><div class="card pad"><h3>Join a room</h3><div class="row" style="padding-top:10px"><input id="mpc" maxlength="5" placeholder="CODE" aria-label="Room code" autocomplete="off" autocapitalize="characters" style="height:48px;width:140px;text-align:center;font-size:22px;letter-spacing:.2em;font-weight:800;border-radius:12px;border:1px solid var(--bd);background:var(--card)"><button class="btn p" data-mp="join">Join room</button><button class="btn" data-mp="test">Test storage</button></div></div><p class="msg" id="mpmsg" role="status"></p></section>
+  ${sec('Pass & play','Two players, one device — take turns.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play on this device','data-mp="local" data-g="'+k+'"')).join('')}</div>`)}`;
+  const say=m=>{const e=$('#mpmsg');if(e){e.textContent=m;e.scrollIntoView({block:'nearest',behavior:'smooth'})}toast(m)};
+  const h=async e=>{if(main.onclick!==h||busy)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
+    if(a==='local')mpLocal(x.dataset.g);
+    else if(a==='dhost')mpDirectHost($('#dg').value);
+    else if(a==='djoin')mpDirectJoin();
+    else if(a==='create'){busy=true;await mpCreate(x.dataset.g,say);busy=false}
+    else if(a==='join'){busy=true;say('Joining…');await mpJoin($('#mpc').value,say);busy=false}
+    else if(a==='test'){busy=true;say('Testing shared storage…');
+      try{if(!window.storage)throw new Error('the storage API is missing in this view');
+        const k='room:test'+pid().slice(0,4);await tmo(window.storage.set(k,JSON.stringify({t:Date.now()}),true),4000);
+        const r=await tmo(window.storage.get(k,true),4000);try{await window.storage.delete(k,true)}catch(er){}
+        say(r&&r.value?'✅ Shared storage works.':'⚠️ Saved but could not be read back.')}
+      catch(err){say('❌ Shared storage isn\'t working here ('+(err&&err.message?err.message:'unknown')+'). Use Direct connection instead.')}
+      busy=false}};
+  main.onclick=h;
+  main.oninput=e=>{if(e.target.id==='mpn'){const v=e.target.value.trim().slice(0,16);if(v){S.name=v;save()}}else if(e.target.id==='mpc')e.target.value=e.target.value.toUpperCase().replace(/[^A-Z2-9]/g,'').slice(0,5)};
+  main.onkeydown=e=>{if(e.key==='Enter'&&e.target.id==='mpc')h({target:$('[data-mp=join]')})};
+  cleanup=()=>{main.onclick=main.oninput=main.onkeydown=null}}
+
+/* ----- direct connection (WebRTC, manual code exchange, host-authoritative) ----- */
+const RTC_CFG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]};
+const TA='width:100%;min-height:110px;margin-top:8px;font:12px monospace;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--t);padding:8px;word-break:break-all;resize:vertical';
+const b64e=o=>btoa(unescape(encodeURIComponent(JSON.stringify(o))));
+const b64d=s=>JSON.parse(decodeURIComponent(escape(atob(String(s).replace(/\s+/g,'')))));
+const iceDone=(pc,ms=5000)=>new Promise(res=>{if(pc.iceGatheringState==='complete')return res();const t=setTimeout(res,ms);pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete'){clearTimeout(t);res()}})});
+const dShell=(t,b)=>`<div class="gh"><button class="btn" data-mp="lobby">← Back</button><div class="sp"><h2>${esc(t)}</h2><span class="badge">Direct connection</span></div></div><div class="stage" style="max-width:640px">${b}</div>`;
+async function copyText(t){try{await navigator.clipboard.writeText(t);toast('Copied!')}catch(e){const ta=$('#dout');if(ta){ta.focus();ta.select();try{document.execCommand('copy');toast('Copied!')}catch(er){toast('Select the code and copy it manually.')}}}}
+
+async function mpDirectHost(gk){
+  const G=MP[gk];if(!G)return;
+  if(!window.RTCPeerConnection)return toast('Direct connection isn\'t supported in this browser.');
+  let pc,dc,alive=true,peer=null;
+  try{pc=new RTCPeerConnection(RTC_CFG);dc=pc.createDataChannel('g')}catch(e){return toast('Could not start a direct connection here.')}
+  cleanup=()=>{alive=false;main.onclick=main.oninput=main.onkeydown=null;try{pc.close()}catch(e){}};
+  main.oninput=main.onkeydown=null;window.scrollTo(0,0);
+  main.innerHTML=dShell('Host: '+G.name,'<p class="muted">Creating your invite code…</p>');
+  const st=m=>{const e=$('#dst');if(e)e.textContent=m};
+  dc.onopen=()=>{if(alive){alive=false;mpDirectPlay({host:true,gk,dc,pc,peer:peer||{name:'Friend',av:'🎮'}})}};
+  pc.onconnectionstatechange=()=>{if(alive&&pc.connectionState==='failed')st('Could not connect — the networks may be blocking a direct link. Try both devices on the same Wi-Fi.')};
+  const h=async e=>{if(main.onclick!==h)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
+    if(a==='lobby')return go('multiplayer');
+    if(a==='copy')return copyText($('#dout').value);
+    if(a==='apply'){try{const r=b64d($('#din').value);if(typeof r.s!=='string'||r.s.length>20000)throw 0;peer={name:cleanP({name:r.n}).name,av:cleanP({av:r.a}).av};st('Connecting…');await pc.setRemoteDescription({type:'answer',sdp:r.s})}catch(er){st('That reply code isn\'t valid. Paste the whole code your friend sent.')}}};
+  main.onclick=h;
+  try{await pc.setLocalDescription(await pc.createOffer());await iceDone(pc);if(!alive)return;
+    const code=b64e({g:gk,n:pname(),a:S.avatar,s:pc.localDescription.sdp});
+    main.innerHTML=dShell('Host: '+G.name,`<div class="card pad"><b>Step 1</b> — send this invite code to your friend (any chat app):<textarea id="dout" readonly onfocus="this.select()" style="${TA}">${code}</textarea><div class="row"><button class="btn p" data-mp="copy">Copy invite code</button></div></div>
+    <div class="card pad"><b>Step 2</b> — paste the reply code they send back, then tap Connect:<textarea id="din" style="${TA}" placeholder="Paste reply code here"></textarea><div class="row"><button class="btn p" data-mp="apply">Connect</button></div></div><p class="msg" id="dst" role="status">Waiting for your friend…</p>`)}
+  catch(er){if(alive)main.innerHTML=dShell('Host: '+G.name,'<p class="msg">Could not create an invite code on this device/network. Try Pass &amp; play instead.</p>')}}
+
+function mpDirectJoin(){
+  if(!window.RTCPeerConnection)return toast('Direct connection isn\'t supported in this browser.');
+  let pc=null,alive=true;
+  cleanup=()=>{alive=false;main.onclick=main.oninput=main.onkeydown=null;try{pc&&pc.close()}catch(e){}};
+  main.oninput=main.onkeydown=null;window.scrollTo(0,0);
+  main.innerHTML=dShell('Join a direct game',`<div class="card pad"><b>Step 1</b> — paste the invite code from the host:<textarea id="din" style="${TA}" placeholder="Paste invite code here"></textarea><div class="row"><button class="btn p" data-mp="mk">Create reply code</button></div></div><div id="dstep2"></div><p class="msg" id="dst" role="status"></p>`);
+  const st=m=>{const e=$('#dst');if(e)e.textContent=m};
+  const h=async e=>{if(main.onclick!==h)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
+    if(a==='lobby')return go('multiplayer');
+    if(a==='copy')return copyText($('#dout').value);
+    if(a==='mk'){let inv;try{inv=b64d($('#din').value);if(!MP[inv.g]||typeof inv.s!=='string'||inv.s.length>20000)throw 0}catch(er){return st('That invite code isn\'t valid. Paste the whole code.')}
+      try{if(pc)pc.close()}catch(er){}
+      st('Creating reply code…');
+      try{pc=new RTCPeerConnection(RTC_CFG);const host={name:cleanP({name:inv.n}).name,av:cleanP({av:inv.a}).av};
+        pc.ondatachannel=ev=>{const dc=ev.channel,go2=()=>{if(alive){alive=false;mpDirectPlay({host:false,gk:inv.g,dc,pc,peer:host})}};if(dc.readyState==='open')go2();else dc.onopen=go2};
+        pc.onconnectionstatechange=()=>{if(alive&&pc.connectionState==='failed')st('Could not connect — try both devices on the same Wi-Fi.')};
+        await pc.setRemoteDescription({type:'offer',sdp:inv.s});await pc.setLocalDescription(await pc.createAnswer());await iceDone(pc);
+        const code=b64e({n:pname(),a:S.avatar,s:pc.localDescription.sdp});
+        $('#dstep2').innerHTML=`<div class="card pad"><b>Step 2</b> — send this reply code back to the host, then keep this page open:<textarea id="dout" readonly onfocus="this.select()" style="${TA}">${code}</textarea><div class="row"><button class="btn p" data-mp="copy">Copy reply code</button></div></div>`;
+        st('Waiting for the host to connect…')}
+      catch(er){st('Could not create a reply — is the invite code complete?')}}};
+  main.onclick=h}
+
+function mpDirectPlay({host,gk,dc,pc,peer}){
+  const G=MP[gk],me=host?0:1;let full=null,s=null,started=false,games=0,pending=false,counted=false,alive=true,dead=false;
+  const mine={name:pname(),av:S.avatar},nm=host?[mine.name,peer.name]:[peer.name,mine.name],av=host?[mine.av,peer.av]:[peer.av,mine.av];
+  const send=o=>{try{dc.send(JSON.stringify(o))}catch(e){}};
+  const cur=()=>host?(full?G.pub(full):null):s;
+  const share=()=>{if(host)send({t:'state',s:full?G.pub(full):null,st:started})};
+  function start(){games++;full=G.init();if('turn' in full)full.turn=(games-1)%2;started=true;counted=false;share();draw()}
+  function hostAct(a){if(!full)return;const n=G.apply(full,0,a);if(!n)return;full=n;beep(440,.05);share();draw()}
+  function guestAct(a){if(pending||dead)return;pending=true;send({t:'act',a});draw();setTimeout(()=>{if(alive&&pending){pending=false;draw()}},4000)}
+  dc.onmessage=ev=>{let m;try{m=JSON.parse(ev.data)}catch(e){return}if(!m||typeof m!=='object')return;
+    if(host){if(m.t==='act'&&full){const n=G.apply(full,1,m.a);if(n){full=n;beep(330,.05);share();draw()}}else if(m.t==='rematch'&&full&&full.over)start()}
+    else if(m.t==='state'){s=m.s;started=!!m.st;pending=false;draw()}};
+  const drop=()=>{if(alive&&!dead){dead=true;draw()}};
+  dc.onclose=drop;pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState))drop()};
+  function draw(){if(!alive)return;const state=cur();let body;
+    if(!started||!state)body=host?`<div class="card pad empty"><h3>${esc(nm[1])} is connected ✅</h3><div class="row" style="justify-content:center"><button class="btn p" data-mp="start">Start game</button></div></div>`:`<div class="card pad empty"><h3>Connected! Waiting for the host to start…</h3></div>`;
+    else{try{body=G.view(state,me,nm.map(esc),!pending&&!dead)}catch(e){body='<div class="card pad empty">Could not display the game state.</div>'}
+      if(state.over){if(!counted){counted=true;const m=S.mp||(S.mp={w:0,l:0,d:0});if(state.win==='d')m.d++;else if(state.win===me)m.w++;else m.l++;save()}
+        body+=`<div class="row" style="justify-content:center"><button class="btn p" data-mp="rematch">${host?'Rematch':'Ask for rematch'}</button></div>`}else counted=false}
+    const pl=[0,1].map(i=>`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:22px">${av[i]}</span><b>${esc(nm[i])}</b><span class="muted">${i===0?'host':'guest'}${i===me?' · you':''}</span><span style="width:9px;height:9px;border-radius:50%;display:inline-block;background:${dead?'#ef4444':'#22c55e'}"></span></div>`).join('');
+    main.innerHTML=`<div class="gh"><button class="btn" data-mp="lobby">← Leave</button><div class="sp"><h2>${G.name}</h2><span class="badge">Direct connection</span></div></div><div class="card pad" style="margin-top:14px"><div style="display:grid;gap:8px">${pl}</div></div>${dead?'<p class="msg" style="color:#ef4444">Connection lost. Go back and start a new game.</p>':''}<div class="stage">${body}${!host&&pending?'<p class="muted" style="text-align:center">Sending move…</p>':''}</div>`}
+  const h=e=>{if(main.onclick!==h)return;const x=e.target.closest('[data-mp],[data-act]');if(!x)return;
+    if(x.dataset.mp==='lobby')return go('multiplayer');if(!alive||dead)return;
+    if(x.dataset.mp==='start'){if(host)start()}
+    else if(x.dataset.mp==='rematch'){if(host){if(full&&full.over)start()}else send({t:'rematch'})}
+    else if(x.dataset.act){let a;try{a=JSON.parse(x.dataset.act)}catch(er){return}host?hostAct(a):guestAct(a)}};
+  main.onclick=h;main.oninput=main.onkeydown=null;
+  cleanup=()=>{alive=false;main.onclick=null;try{dc.close();pc.close()}catch(e){}};
+  draw();window.scrollTo(0,0);toast('Connected! 🎉')}
+
+setTimeout(()=>{INFO.FAQ='Do I need an account? No. Is multiplayer live? Yes — use Direct connection to play with a friend on another device (you swap two codes by message), or room codes if shared storage is available. A dedicated Socket.IO server is the production path. Where is my progress saved? In this browser only.'},0);
 
 /* ---------- registry (add new games here) ---------- */
 const GAMES=[
