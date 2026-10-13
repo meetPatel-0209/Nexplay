@@ -467,7 +467,7 @@ const pname=()=>S.name||(S.name='Player'+(100+Math.random()*900|0));
 async function sget(k){try{const r=await window.storage.get(k,true);return r&&r.value?JSON.parse(r.value):null}catch(e){return null}}
 async function sset(k,v){try{return !!(await window.storage.set(k,JSON.stringify(v),true))}catch(e){return false}}
 const CHARS='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-const mkCode=()=>Array.from({length:5},()=>CHARS[Math.random()*CHARS.length|0]).join('');
+const mkCode=()=>Array.from({length:6},()=>CHARS[Math.random()*CHARS.length|0]).join('');
 
 const T_L=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
 const C4H={drop(b,c){for(let r=5;r>=0;r--)if(!b[r*7+c])return r;return -1},
@@ -984,6 +984,104 @@ function mpDirectPlay({host,gk,dc,pc,peer}){
   draw();window.scrollTo(0,0);toast('Connected! 🎉')}
 
 setTimeout(()=>{INFO.FAQ='Do I need an account? No. Is multiplayer live? Yes — use Direct connection to play with a friend on another device (you swap two codes by message), or room codes if shared storage is available. A dedicated Socket.IO server is the production path. Where is my progress saved? In this browser only.'},0);
+
+/* ---------- multiplayer v3: short 6-letter codes via a public broker (PeerJS), with fallbacks ---------- */
+let peerLibP=null;
+function loadPeer(){if(window.Peer)return Promise.resolve(true);if(peerLibP)return peerLibP;
+  peerLibP=new Promise(res=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js';
+    s.onload=()=>res(!!window.Peer);s.onerror=()=>res(false);document.head.appendChild(s);setTimeout(()=>res(!!window.Peer),6000)}).then(ok=>{if(!ok)peerLibP=null;return ok});return peerLibP}
+function mkShim(conn,peer){
+  const dc={readyState:'open',onmessage:null,onclose:null,send:s=>{try{conn.send(s)}catch(e){}},close:()=>{try{conn.close()}catch(e){}}};
+  const pc={connectionState:'connected',onconnectionstatechange:null,close:()=>{try{peer.destroy()}catch(e){}}};return{dc,pc}}
+
+async function mpPeerHost(gk){
+  if(!(await loadPeer()))return false;
+  for(let n=0;n<3;n++){
+    const code=mkCode();
+    const r=await new Promise(res=>{let peer,done=false;
+      try{peer=new Peer('nxp-'+code,{debug:0})}catch(e){return res({ok:false})}
+      const t=setTimeout(()=>{if(done)return;done=true;try{peer.destroy()}catch(e){}res({ok:false,why:'timeout'})},7000);
+      peer.on('open',()=>{if(done)return;done=true;clearTimeout(t);res({ok:true,peer,code})});
+      peer.on('error',err=>{if(done)return;done=true;clearTimeout(t);try{peer.destroy()}catch(e){}res({ok:false,why:err&&err.type})})});
+    if(r.ok)return mpPeerWait(gk,r.peer,r.code);
+    if(r.why!=='unavailable-id')return false}
+  return false}
+
+function mpPeerWait(gk,peer,code){
+  const G=MP[gk];let alive=true,used=false;
+  cleanup=()=>{alive=false;main.onclick=main.oninput=main.onkeydown=null;try{peer.destroy()}catch(e){}};
+  main.oninput=main.onkeydown=null;window.scrollTo(0,0);
+  main.innerHTML=`<div class="gh"><button class="btn" data-mp="lobby">← Cancel</button><div class="sp"><h2>${G.name}</h2><span class="badge">Waiting for a friend</span></div></div>
+  <div class="card pad empty" style="margin-top:14px"><span class="muted">Your room code</span><div style="font-size:clamp(34px,11vw,52px);font-weight:900;letter-spacing:.22em;margin:6px 0">${code}</div>
+  <div class="row" style="justify-content:center"><button class="btn p" data-mp="copy">Copy code</button></div>
+  <p class="muted" style="margin-top:10px">Ask your friend to open Multiplayer, type this code and tap Join. Keep this page open.</p></div>`;
+  const h=e=>{if(main.onclick!==h)return;const x=e.target.closest('[data-mp]');if(!x)return;if(x.dataset.mp==='lobby')return go('multiplayer');if(x.dataset.mp==='copy')copyText(code)};
+  main.onclick=h;
+  peer.on('connection',conn=>{if(used){try{conn.close()}catch(e){}return}
+    used=true;let got=false;const sh=mkShim(conn,peer);
+    conn.on('open',()=>conn.send({t:'hello',g:gk,n:pname(),a:S.avatar}));
+    conn.on('data',d=>{if(!got){if(d&&d.t==='hello'&&alive){got=true;alive=false;mpDirectPlay({host:true,gk,dc:sh.dc,pc:sh.pc,peer:{name:cleanP({name:d.n}).name,av:cleanP({av:d.a}).av}})}return}sh.dc.onmessage&&sh.dc.onmessage({data:d})});
+    conn.on('close',()=>{if(!got)used=false;sh.dc.onclose&&sh.dc.onclose()});
+    conn.on('error',()=>{if(!got)used=false;sh.dc.onclose&&sh.dc.onclose()})});
+  peer.on('error',err=>{if(alive)toast('Connection problem: '+(err&&err.type||'unknown'))});
+  return true}
+
+function mpPeerJoin(code,say){
+  return loadPeer().then(ok=>{if(!ok)return false;say('Connecting to '+code+'…');
+    return new Promise(res=>{let peer,done=false;
+      const fail=()=>{if(done)return;done=true;try{peer&&peer.destroy()}catch(e){}res(false)};
+      try{peer=new Peer({debug:0})}catch(e){return res(false)}
+      const t=setTimeout(fail,9000);peer.on('error',fail);
+      peer.on('open',()=>{const conn=peer.connect('nxp-'+code,{serialization:'json',reliable:true}),sh=mkShim(conn,peer);let got=false;
+        conn.on('error',fail);conn.on('open',()=>conn.send({t:'hello',n:pname(),a:S.avatar}));
+        conn.on('data',d=>{if(!got){if(d&&d.t==='hello'&&MP[d.g]&&!done){got=true;done=true;clearTimeout(t);res(true);
+          mpDirectPlay({host:false,gk:d.g,dc:sh.dc,pc:sh.pc,peer:{name:cleanP({name:d.n}).name,av:cleanP({av:d.a}).av}})}return}sh.dc.onmessage&&sh.dc.onmessage({data:d})});
+        conn.on('close',()=>{sh.dc.onclose&&sh.dc.onclose()})})})})}
+
+async function mpCreate(gk,say){
+  if(!MP[gk])return;say('Creating game…');
+  if(await mpPeerHost(gk))return;
+  say('Online service unreachable — trying shared storage…');let code=null;
+  for(let i=0;i<4;i++){const c=mkCode(),ex=await sget('room:'+c);if(!ex||ex.status==='closed'||Date.now()-ex.t>120000){code=c;break}}
+  const room=code&&{code,game:gk,host:{id:pid(),name:pname(),av:S.avatar},guest:null,status:'waiting',state:null,v:0,t:Date.now()};
+  if(!room||!(await sset('room:'+code,room))){toast('No online service reachable — using manual codes.');return mpDirectHost(gk)}
+  await sset('room:'+code+':g',{guest:null,seq:0,act:null,hb:0});
+  mpRoom({role:'host',code,gk,room})}
+
+async function mpJoin(raw,say){
+  const code=String(raw||'').trim().toUpperCase();if(!/^[A-Z2-9]{6}$/.test(code))return say('Room codes are 6 letters/numbers.');
+  say('Looking for the room…');
+  const r=await sget('room:'+code);
+  if(r&&r.status!=='closed'&&MP[r.game]){
+    if(r.guest&&r.guest.id!==pid())return say('That room is already full.');
+    const old=await sget('room:'+code+':g'),seq=old&&old.guest&&old.guest.id===pid()?(old.seq||0):0;
+    if(!(await sset('room:'+code+':g',{guest:{id:pid(),name:pname(),av:S.avatar},seq,act:null,hb:Date.now()})))return say('Could not reach shared storage.');
+    return mpRoom({role:'guest',code,gk:r.game,room:r,seq})}
+  if(await mpPeerJoin(code,say))return;
+  say('Room not found. Check the code, and make sure the host is waiting with the page open.')}
+
+function mpLobby(){
+  const rec=S.mp||(S.mp={w:0,l:0,d:0});let busy=false;
+  const opts=Object.keys(MP).map(k=>`<option value="${k}">${MP[k].name}</option>`).join('');
+  main.innerHTML=`<div class="sh"><div><h1 style="font-size:clamp(26px,5vw,36px)">Multiplayer</h1><p>Play with a friend on another device — or share one device.</p></div></div>
+  <div class="card pad"><div class="ctl"><label>Your name <input id="mpn" maxlength="16" value="${esc(pname())}" aria-label="Your name" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 10px;margin-left:6px;width:min(55vw,200px)"></label><span class="muted">${S.avatar} · Online record: ${rec.w}W · ${rec.l}L · ${rec.d}D</span></div></div>
+  ${sec('Play with a friend online','Create a game to get a 6-letter code. Your friend types it in on their device.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Create game','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
+  <section><div class="card pad"><h3>Join with a code</h3><div class="row" style="padding-top:10px"><input id="mpc" maxlength="6" placeholder="CODE" aria-label="Room code" autocomplete="off" autocapitalize="characters" style="height:48px;width:160px;text-align:center;font-size:22px;letter-spacing:.2em;font-weight:800;border-radius:12px;border:1px solid var(--bd);background:var(--card)"><button class="btn p" data-mp="join">Join</button></div></div><p class="msg" id="mpmsg" role="status"></p></section>
+  ${sec('Pass & play','Two players, one device — take turns.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play on this device','data-mp="local" data-g="'+k+'"')).join('')}</div>`)}
+  ${sec('Manual codes (backup)','If the online service is blocked on your network, you can still connect by swapping two long codes.',`<div class="card pad"><div class="row" style="padding:0"><label>Game <select id="dg" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 8px;margin-left:6px">${opts}</select></label><button class="btn" data-mp="dhost">Host with manual codes</button><button class="btn" data-mp="djoin">Join with manual codes</button></div></div>`)}`;
+  const say=m=>{const e=$('#mpmsg');if(e){e.textContent=m;e.scrollIntoView({block:'nearest',behavior:'smooth'})}toast(m)};
+  const h=async e=>{if(main.onclick!==h||busy)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
+    if(a==='local')mpLocal(x.dataset.g);
+    else if(a==='dhost')mpDirectHost($('#dg').value);
+    else if(a==='djoin')mpDirectJoin();
+    else if(a==='create'){busy=true;await mpCreate(x.dataset.g,say);busy=false}
+    else if(a==='join'){busy=true;await mpJoin($('#mpc').value,say);busy=false}};
+  main.onclick=h;
+  main.oninput=e=>{if(e.target.id==='mpn'){const v=e.target.value.trim().slice(0,16);if(v){S.name=v;save()}}else if(e.target.id==='mpc')e.target.value=e.target.value.toUpperCase().replace(/[^A-Z2-9]/g,'').slice(0,6)};
+  main.onkeydown=e=>{if(e.key==='Enter'&&e.target.id==='mpc')h({target:$('[data-mp=join]')})};
+  cleanup=()=>{main.onclick=main.oninput=main.onkeydown=null}}
+
+setTimeout(()=>{INFO.FAQ='Do I need an account? No. Is multiplayer live? Yes — create a game to get a 6-letter code and your friend joins with it on their device. This uses a free public connection service (PeerJS); if it is blocked on your network the game falls back to shared storage, then to manual codes. A dedicated Socket.IO server is the production path. Where is my progress saved? In this browser only.'},0);
 
 /* ---------- registry (add new games here) ---------- */
 const GAMES=[
