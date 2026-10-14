@@ -1083,6 +1083,37 @@ function mpLobby(){
 
 setTimeout(()=>{INFO.FAQ='Do I need an account? No. Is multiplayer live? Yes — create a game to get a 6-letter code and your friend joins with it on their device. This uses a free public connection service (PeerJS); if it is blocked on your network the game falls back to shared storage, then to manual codes. A dedicated Socket.IO server is the production path. Where is my progress saved? In this browser only.'},0);
 
+/* ---------- multiplayer lobby v4: Create / Join room as a dedicated top section ---------- */
+function mpLobby(){
+  const rec=S.mp||(S.mp={w:0,l:0,d:0});let busy=false;
+  const gopts=Object.keys(MP).map(k=>`<option value="${k}">${MP[k].name}</option>`).join('');
+  const fld='height:50px;border-radius:12px;border:1px solid var(--bd);background:var(--card);padding:0 12px;width:100%;margin:6px 0 12px';
+  main.innerHTML=`<div class="sh"><div><h1 style="font-size:clamp(26px,5vw,36px)">Multiplayer</h1><p>Play with a friend on another phone or computer.</p></div></div>
+  <section id="room-box" style="margin-top:0"><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))">
+    <div class="card pad"><h3>Create a room</h3><p class="muted">Pick a game, get a 6-letter code and send it to your friend.</p>
+      <label class="muted" for="cg">Game</label><select id="cg" style="${fld}">${gopts}</select>
+      <button class="btn p" data-mp="create" style="width:100%;min-height:52px;font-size:16px">Create room</button></div>
+    <div class="card pad"><h3>Join a room</h3><p class="muted">Type the 6-letter code your friend gave you.</p>
+      <label class="muted" for="mpc">Room code</label><input id="mpc" maxlength="6" placeholder="CODE" autocomplete="off" autocapitalize="characters" style="${fld};text-align:center;font-size:22px;letter-spacing:.2em;font-weight:800">
+      <button class="btn p" data-mp="join" style="width:100%;min-height:52px;font-size:16px">Join room</button></div>
+  </div><p class="msg" id="mpmsg" role="status" style="margin-top:12px"></p></section>
+  <div class="card pad" style="margin-top:6px"><div class="ctl"><label>Your name <input id="mpn" maxlength="16" value="${esc(pname())}" aria-label="Your name" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 10px;margin-left:6px;width:min(50vw,200px)"></label><span class="muted">${S.avatar} · ${rec.w}W · ${rec.l}L · ${rec.d}D</span></div></div>
+  ${sec('Pass & play','Two players, one device — take turns.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play on this device','data-mp="local" data-g="'+k+'"')).join('')}</div>`)}
+  <section><details class="card pad"><summary style="font-weight:700;cursor:pointer;min-height:28px">Manual codes (backup if the online service is blocked)</summary>
+    <p class="muted" style="margin:8px 0">Connect by swapping two long codes by message.</p>
+    <div class="row" style="padding:0"><select id="dg" aria-label="Game" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 8px">${gopts}</select><button class="btn" data-mp="dhost">Host with manual codes</button><button class="btn" data-mp="djoin">Join with manual codes</button></div></details></section>`;
+  const say=m=>{const e=$('#mpmsg');if(e){e.textContent=m;e.scrollIntoView({block:'nearest',behavior:'smooth'})}toast(m)};
+  const h=async e=>{if(main.onclick!==h||busy)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
+    if(a==='local')mpLocal(x.dataset.g);
+    else if(a==='dhost')mpDirectHost($('#dg').value);
+    else if(a==='djoin')mpDirectJoin();
+    else if(a==='create'){busy=true;await mpCreate($('#cg').value,say);busy=false}
+    else if(a==='join'){busy=true;await mpJoin($('#mpc').value,say);busy=false}};
+  main.onclick=h;
+  main.oninput=e=>{if(e.target.id==='mpn'){const v=e.target.value.trim().slice(0,16);if(v){S.name=v;save()}}else if(e.target.id==='mpc')e.target.value=e.target.value.toUpperCase().replace(/[^A-Z2-9]/g,'').slice(0,6)};
+  main.onkeydown=e=>{if(e.key==='Enter'&&e.target.id==='mpc')h({target:$('[data-mp=join]')})};
+  cleanup=()=>{main.onclick=main.oninput=main.onkeydown=null}}
+
 /* ---------- registry (add new games here) ---------- */
 const GAMES=[
  {id:'ttt',title:'Tic-Tac-Toe',cat:'Board',mode:'Solo vs AI',added:5,quick:1,glyph:'✕ ○',grad:'linear-gradient(135deg,#7c3aed,#22d3ee)',goal:'Win a round against the AI',how:'Get three in a row. You are X. On Hard the AI never loses, so a draw is a great result.',mount:ttt},
