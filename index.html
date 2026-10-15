@@ -1546,6 +1546,12 @@ function mpLobby(){
   ${sec('Party games','For 2–8 players, each on their own device. Create a room and share the 6-digit code.',`<div class="grid">${Object.keys(GM).map(k=>gmCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
   ${sec('Two-player games','Online with a friend — Tic-Tac-Toe, Connect Four, Chess and more.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
   ${sec('Pass & play','Two players, one device — take turns.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play on this device','data-mp="local" data-g="'+k+'"')).join('')}</div>`)}
+  <section><div class="card pad"><h3>Not connecting?</h3><p class="muted" style="margin:6px 0 10px">Run a quick check to see what works in this app — and why a 6-digit code may not be created. For real 6-digit codes everywhere, host the small NEXPLAY server yourself.</p>
+    <div class="row" style="padding:0"><button class="btn p" data-diag="run">Run connection check</button><button class="btn" data-diag="srv">Host your own server</button></div>
+    <p class="msg" id="diag-out" style="text-align:left;margin-top:10px"></p>
+    <div id="srv-box" hidden style="margin-top:10px"><p class="muted">1) Make a folder <b>nexplay</b> with <b>package.json</b>, <b>server.js</b> and <b>public/index.html</b> (paste this page's code into index.html). 2) Run <b>npm install</b> then <b>npm start</b>. 3) Open http://localhost:3000 — on a phone use your computer's IP address on the same Wi-Fi. To go online, deploy the folder as a Node web service (Render, Railway, etc.).</p>
+      <b>package.json</b><textarea id="srv-pkg" readonly onfocus="this.select()" style="${TA};min-height:150px">${esc(SRV_PKG)}</textarea><div class="row"><button class="btn" data-diag="cpkg">Copy package.json</button></div>
+      <b>server.js</b><textarea id="srv-js" readonly onfocus="this.select()" style="${TA};min-height:260px">${esc(SRV_JS)}</textarea><div class="row"><button class="btn" data-diag="cjs">Copy server.js</button></div></div></div></section>
   <section><details class="card pad"><summary style="font-weight:700;cursor:pointer;min-height:28px">Manual codes (last-resort backup)</summary>
     <p class="muted" style="margin:8px 0">Only needed if 6-digit rooms can't connect. Swap two long codes by message instead.</p>
     <div class="row" style="padding:0"><select id="dg" aria-label="Game" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 8px"><optgroup label="Party games">${party}</optgroup><optgroup label="Two-player games">${two}</optgroup></select><button class="btn" data-mp="dhost">Host with manual codes</button><button class="btn" data-mp="djoin">Join with manual codes</button></div></details></section>`;
@@ -1583,7 +1589,10 @@ function ringout(el,ctx){
     el.innerHTML=`<div class="card pad"><h3>Ring Out</h3><p class="muted" style="margin:6px 0 12px">Shove your rivals off a shrinking platform. Last one standing wins the round — first to ${cfg.win} round wins takes the match.</p>
     <div class="ctl"><label>Players on this device <select id="ro-h">${opt([1,2,3],cfg.humans)}</select></label><label>Bots <select id="ro-b">${opt([0,1,2,3,4,5,6,7],cfg.bots)}</select></label><label>First to <select id="ro-w">${opt([2,3,5],cfg.win)}</select></label></div>
     <p class="muted" style="margin:12px 0">${touch?'Touch: drag the joystick to move, tap DASH to shove (Player 1). ':''}Keyboard — P1: W A S D + Space · P2: Arrow keys + Enter · P3: I J K L + U. Dash has a short cooldown.</p>
-    <button class="btn p" id="ro-go" style="width:100%">Start match</button></div>`}
+    <button class="btn p" id="ro-go" style="width:100%">Start match</button></div>
+    <div class="card pad" style="margin-top:12px"><h3>🌐 Play online with friends</h3><p class="muted" style="margin:6px 0 10px">Create a room to get a 6-digit code, or join a friend's room. Everyone fights in the same live arena.</p>
+      <div class="row" style="padding:0"><button class="btn p" data-ro="create">Create online room</button></div>
+      <div class="row" style="padding-top:10px"><input id="ro-code" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="off" style="height:46px;width:150px;text-align:center;font-size:18px;letter-spacing:.15em;border-radius:12px;border:1px solid var(--bd);background:var(--card);color:var(--t)"><button class="btn" data-ro="join">Join</button></div></div>`}
 
   function startMatch(){
     cfg.humans=+$('#ro-h',el).value;cfg.bots=Math.min(+$('#ro-b',el).value,8-cfg.humans);cfg.win=+$('#ro-w',el).value;if(cfg.humans+cfg.bots<2)cfg.bots=1;
@@ -1789,7 +1798,7 @@ function ringNet(o){
 
   function renderLobby(){const b=$('#rn-lobby');if(!b)return;
     const pl=P.map((p,i)=>`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:22px">${p.av}</span><b>${esc(p.name)}</b><span class="muted">${i===0?'host':''}${i===you?' · you':''}</span><span style="width:9px;height:9px;border-radius:50%;display:inline-block;background:${p.on===false?'#ef4444':'#22c55e'}"></span></div>`).join('');
-    b.innerHTML=`<div class="card pad"><div class="ctl"><div><span class="muted">Room code</span><div style="font-size:${code?34:20}px;font-weight:900;letter-spacing:.2em">${code?esc(code):'Manual codes'}</div></div>${host&&code?'<button class="btn" data-rn="copy">Copy code</button>':''}</div>
+    b.innerHTML=`<div class="card pad"><div class="ctl"><div><span class="muted">Room code</span><div style="font-size:${code?34:20}px;font-weight:900;letter-spacing:.2em">${code?esc(code):'Manual codes'}</div></div>${host&&code?'<button class="btn" data-rn="copy">Copy code</button>':''}</div>${host&&!code?'<p class="msg" style="color:#f59e0b;text-align:left;margin-top:8px">No 6-digit code could be created: shared storage and the NEXPLAY server are not available in this view. Use ➕ Add a player (manual code) below, or run the connection check on the Multiplayer page.</p>':''}
     <p class="muted" style="margin:8px 0">Shove rivals off a shrinking platform. Last fighter standing wins the round; first to ${cfg.win} round wins takes the match. ${touch?'Touch: joystick + DASH.':'Move: WASD or arrows · Dash: Space.'}</p>
     <b>Players (${P.length}/8)</b><div style="display:grid;gap:8px;margin-top:8px">${pl}</div>
     ${host?`<div class="ctl" style="margin-top:12px"><label>Bots <select id="rn-b2">${roOpt([0,1,2,3,4,5,6,7],cfg.bots)}</select></label><label>First to <select id="rn-w">${roOpt([2,3,5],cfg.win)}</select></label></div><div class="row" style="padding-top:12px"><button class="btn p" data-rn="start">Start match</button><button class="btn" data-rn="add">➕ Add a player (manual code)</button></div>`:'<p class="msg">Waiting for the host to start…</p>'}</div>`}
@@ -1986,6 +1995,159 @@ async function mpGroupJoinFrom(inv,st){
     const box=$('#dstep2');if(box)box.innerHTML=`<div class="card pad"><b>Step 2</b> — send this reply code back to the host, then keep this page open:<textarea id="dout" readonly onfocus="this.select()" style="${TA}">${code}</textarea><div class="row"><button class="btn p" data-mp="copy">Copy reply code</button></div></div>`;
     st('Waiting for the host to connect…')}
   catch(er){st('Could not create a reply — is the invite code complete?')}}
+
+/* ---------- hosted mode: NEXPLAY relay server (real 6-digit codes anywhere), diagnostics, localStorage fallback ---------- */
+async function load(){try{let raw=null;
+  if(window.storage){try{const r=await window.storage.get('nexplay-v1');raw=r&&r.value}catch(e){}}
+  else{try{raw=localStorage.getItem('nexplay-v1')}catch(e){}}
+  if(raw)S={...S,...JSON.parse(raw)}}catch(e){}}
+function save(){try{const v=JSON.stringify(S);
+  if(window.storage){const p=window.storage.set('nexplay-v1',v);if(p&&p.catch)p.catch(()=>{})}
+  else{try{localStorage.setItem('nexplay-v1',v)}catch(e){}}}catch(e){}}
+
+let relayP=null;
+function loadRelay(){
+  if(window.__relaySock)return Promise.resolve(window.__relaySock);
+  if(window.__relayBad||!/^https?:$/.test(location.protocol))return Promise.resolve(null);
+  if(relayP)return relayP;
+  relayP=new Promise(res=>{
+    const bad=()=>{window.__relayBad=true;res(null)};
+    const s=document.createElement('script');s.src='/socket.io/socket.io.js';s.onerror=bad;
+    s.onload=()=>{try{const sock=io();let done=false;
+      sock.on('connect',()=>{if(done)return;done=true;window.__relaySock=sock;res(sock)});
+      sock.on('connect_error',()=>{if(!done){done=true;try{sock.close()}catch(e){}bad()}});
+      setTimeout(()=>{if(!done){done=true;bad()}},4000)}catch(e){bad()}};
+    document.head.appendChild(s)});
+  return relayP}
+
+function mkRelayConn(sock,code,pid,isHost){
+  const H={data:[],close:[],open:[],error:[]};let closed=false;
+  const c={on(e,f){(H[e]||(H[e]=[])).push(f);if(e==='open')setTimeout(f,0);return c},
+    send(d){if(closed)return;if(isHost)sock.emit('to:guest',{code,pid,d});else sock.emit('to:host',{code,d})},
+    close(){if(closed)return;closed=true;if(!isHost)sock.emit('room:leave',{code})},
+    _in(d){H.data.forEach(f=>f(d))},
+    _close(){if(closed)return;closed=true;H.close.forEach(f=>f())}};
+  return c}
+
+function relayHostRoom(sock,gk,onLink){
+  return new Promise(res=>{
+    sock.emit('room:create',{g:gk,n:pname(),a:S.avatar},ack=>{
+      if(!ack||!ack.code)return res(null);
+      const code=ack.code,links={};
+      const j=m=>{if(!m||m.code!==code)return;const c=mkRelayConn(sock,code,m.pid,true);links[m.pid]=c;onLink(c,{name:cleanP({name:m.n}).name,av:cleanP({av:m.a}).av})};
+      const d=m=>{if(!m||m.code!==code)return;const c=links[m.pid];if(c)c._in(m.d)};
+      const l=m=>{if(!m||m.code!==code)return;const c=links[m.pid];if(c){delete links[m.pid];c._close()}};
+      sock.on('peer:join',j);sock.on('peer:data',d);sock.on('peer:leave',l);
+      res({code,stop(){sock.off('peer:join',j);sock.off('peer:data',d);sock.off('peer:leave',l);sock.emit('room:close',{code})}})});
+    setTimeout(()=>res(null),6000)})}
+
+function relayJoinRoom(sock,code){
+  return new Promise(res=>{
+    sock.emit('room:join',{code,n:pname(),a:S.avatar},ack=>{
+      if(!ack||!ack.ok)return res(null);
+      const c=mkRelayConn(sock,code,null,false);
+      sock.on('host:data',m=>{if(m&&m.code===code)c._in(m.d)});
+      sock.on('host:left',m=>{if(m&&m.code===code)c._close()});
+      res({conn:c,g:ack.g,host:ack.host})});
+    setTimeout(()=>res(null),6000)})}
+
+async function relayCreateAny(sock,gk,say){
+  let onLink=null;
+  const r=await relayHostRoom(sock,gk,(c,info)=>{if(onLink)onLink(c,info)});
+  if(!r)return say('Could not create a room on the server. Try again.');
+  if(gk==='ringout'){const o={host:true,code:r.code,sig:{stop:r.stop}};ringNet(o);onLink=(c,info)=>{if(o.addLink)o.addLink(c,info)};return}
+  const H={},fake={on(e,f){H[e]=f},destroy(){r.stop()}};
+  if(GM[gk])mpGroupHost(gk,fake,r.code);else mpPeerWait(gk,fake,r.code);
+  onLink=c=>{if(H.connection)H.connection(c)}}
+
+async function relayJoinAny(sock,code){
+  const r=await relayJoinRoom(sock,code);if(!r)return false;
+  const conn=r.conn,g=r.g,hn=cleanP({name:r.host&&r.host.n}).name,ha=cleanP({av:r.host&&r.host.a}).av;
+  const leave={destroy(){try{conn.close()}catch(e){}}};
+  if(g==='ringout'){ringNet({host:false,code,link:conn,pc:{close(){try{conn.close()}catch(e){}}},hostInfo:{name:hn,av:ha}});return true}
+  if(GM[g]){conn.send({t:'hello',n:pname(),a:S.avatar});mpGroupGuest(g,conn,leave,{n:hn,a:ha});return true}
+  if(MP[g]){const sh=mkShim(conn,leave);
+    conn.on('data',d=>{sh.dc.onmessage&&sh.dc.onmessage({data:d})});conn.on('close',()=>{sh.dc.onclose&&sh.dc.onclose()});
+    conn.send({t:'hello',n:pname(),a:S.avatar});
+    mpDirectPlay({host:false,gk:g,dc:sh.dc,pc:sh.pc,peer:{name:hn,av:ha}});return true}
+  return false}
+
+async function mpCreate(gk,say){
+  if(!MP[gk]&&!GM[gk])return;
+  say('Creating room…');
+  const sock=await loadRelay();
+  if(sock)return relayCreateAny(sock,gk,say);
+  if(GM[gk])return mpGroupCreate(gk,say);
+  if(await mpPeerHost(gk))return;
+  say('Online service unreachable — trying shared storage…');let code=null;
+  for(let i=0;i<4;i++){const c=mkCode(),ex=await sget('room:'+c);if(!ex||ex.status==='closed'||Date.now()-ex.t>120000){code=c;break}}
+  const room=code&&{code,game:gk,host:{id:pid(),name:pname(),av:S.avatar},guest:null,status:'waiting',state:null,v:0,t:Date.now()};
+  if(!room||!(await sset('room:'+code,room))){toast('No online service reachable — using manual codes.');return mpDirectHost(gk)}
+  await sset('room:'+code+':g',{guest:null,seq:0,act:null,hb:0});
+  mpRoom({role:'host',code,gk,room})}
+
+async function mpJoin(raw,say){
+  const code=String(raw||'').replace(/\D/g,'');if(code.length!==6)return say('Enter the 6-digit room code.');
+  say('Looking for the room…');
+  const sock=await loadRelay();
+  if(sock){if(await relayJoinAny(sock,code))return;return say('Room not found. Check the 6-digit code and make sure the host is waiting.')}
+  const [r,g]=await Promise.all([sget('room:'+code),sget('grp:'+code)]);
+  if(g&&!g.closed&&GM[g.g]&&Date.now()-g.t<300000){if(await mpStoreJoin(code,say,g))return;return say('Could not join — shared storage did not respond.')}
+  if(r&&r.status!=='closed'&&MP[r.game]){
+    if(r.guest&&r.guest.id!==pid())return say('That room is already full.');
+    const old=await sget('room:'+code+':g'),seq=old&&old.guest&&old.guest.id===pid()?(old.seq||0):0;
+    if(!(await sset('room:'+code+':g',{guest:{id:pid(),name:pname(),av:S.avatar},seq,act:null,hb:Date.now()})))return say('Could not reach shared storage.');
+    return mpRoom({role:'guest',code,gk:r.game,room:r,seq})}
+  if(!window.__peerBad&&await mpPeerJoin(code,say))return;
+  say('Room not found. Check the 6-digit code and make sure the host is waiting with the page open. (If the host used manual codes, use "Join with manual codes" at the bottom.)')}
+
+async function mpDiagnose(box){
+  const L=[];const show=()=>{box.innerHTML=L.map(esc).join('<br>')};const add=(ok,t)=>{L.push((ok?'✅ ':'❌ ')+t);show()};
+  box.textContent='Checking…';
+  add(!!window.RTCPeerConnection,'Direct device-to-device connection (WebRTC): '+(window.RTCPeerConnection?'available':'not available'));
+  let st='storage API missing',sharedOk=false;
+  if(window.storage){st='';
+    try{await tmo(window.storage.set('diag:p',JSON.stringify({t:1})),4000);st='personal ok'}catch(e){st='personal failed'}
+    try{await tmo(window.storage.set('diag:s',JSON.stringify({t:1}),true),4000);const r=await tmo(window.storage.get('diag:s',true),4000);sharedOk=!!(r&&r.value);st+=sharedOk?', shared ok':', shared unreadable'}
+    catch(e){st+=', shared failed ('+(e&&e.message?e.message:'error')+')'}}
+  add(sharedOk,'Shared storage (used for 6-digit codes): '+st);
+  const sock=await loadRelay();add(!!sock,'NEXPLAY server (hosted version): '+(sock?'connected':'not found'));
+  let pj=false;if(await loadPeer()){const r=await peerOpen(mkCode());if(r.ok){pj=true;try{r.peer.destroy()}catch(e){}}}
+  add(pj,'Free online service (PeerJS): '+(pj?'reachable':'blocked or unreachable'));
+  L.push((sharedOk||sock||pj)?'➡ A 6-digit code can be created here.':'➡ A 6-digit code CANNOT be created in this view. Use manual codes, or run the NEXPLAY server (button above).');show()}
+
+const SRV_PKG=['{','  "name": "nexplay",','  "version": "1.0.0",','  "main": "server.js",','  "scripts": { "start": "node server.js" },','  "dependencies": { "express": "^4.19.2", "socket.io": "^4.7.5" }','}'].join('\n');
+const SRV_JS=[
+"const express = require('express');","const http = require('http');","const { Server } = require('socket.io');","",
+"const app = express();","const server = http.createServer(app);","const io = new Server(server, { maxHttpBufferSize: 20000 });","app.use(express.static('public'));","",
+"// code -> { host, g, n, a, guests: Map(pid -> socketId) }","const rooms = new Map();","",
+"function newCode() {","  for (let i = 0; i < 100; i++) {","    const c = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');","    if (!rooms.has(c)) return c;","  }","  return null;","}","",
+"io.on('connection', (sock) => {","  let myRoom = null, myPid = null, isHost = false, windowStart = Date.now(), count = 0;",
+"  const allowed = () => {","    const now = Date.now();","    if (now - windowStart > 1000) { windowStart = now; count = 0; }","    return ++count <= (isHost ? 600 : 80);","  };",
+"  const clean = (s) => String(s || '').slice(0, 16);","",
+"  sock.on('room:create', (m, ack) => {","    if (typeof ack !== 'function' || !m || typeof m.g !== 'string' || myRoom) return;","    const code = newCode();","    if (!code) return ack({});",
+"    rooms.set(code, { host: sock.id, g: m.g.slice(0, 20), n: clean(m.n), a: String(m.a || '').slice(0, 4), guests: new Map() });","    myRoom = code; isHost = true;","    ack({ code });","  });","",
+"  sock.on('room:join', (m, ack) => {","    if (typeof ack !== 'function' || !m || myRoom) return;","    const code = String(m.code || '');","    const room = rooms.get(code);","    if (!room || room.guests.size >= 8) return ack({ ok: false });",
+"    const pid = sock.id.slice(0, 10);","    room.guests.set(pid, sock.id);","    myRoom = code; myPid = pid;",
+"    io.to(room.host).emit('peer:join', { code, pid, n: clean(m.n), a: String(m.a || '').slice(0, 4) });","    ack({ ok: true, g: room.g, host: { n: room.n, a: room.a } });","  });","",
+"  sock.on('to:host', (m) => {","    if (!allowed() || isHost || !m || m.code !== myRoom) return;","    const room = rooms.get(myRoom);","    if (room) io.to(room.host).emit('peer:data', { code: myRoom, pid: myPid, d: m.d });","  });","",
+"  sock.on('to:guest', (m) => {","    if (!allowed() || !isHost || !m || m.code !== myRoom) return;","    const room = rooms.get(myRoom);","    const sid = room && room.guests.get(m.pid);","    if (sid) io.to(sid).emit('host:data', { code: myRoom, d: m.d });","  });","",
+"  function leave() {","    const room = myRoom && rooms.get(myRoom);","    if (room) {","      if (isHost) {","        room.guests.forEach((sid) => io.to(sid).emit('host:left', { code: myRoom }));","        rooms.delete(myRoom);","      } else {","        room.guests.delete(myPid);","        io.to(room.host).emit('peer:leave', { code: myRoom, pid: myPid });","      }","    }","    myRoom = null; myPid = null; isHost = false;","  }",
+"  sock.on('room:leave', leave);","  sock.on('room:close', leave);","  sock.on('disconnect', leave);","});","",
+"const PORT = process.env.PORT || 3000;","server.listen(PORT, () => console.log('NEXPLAY running on port ' + PORT));"].join('\n');
+
+function copyBox(id){const ta=document.getElementById(id);if(!ta)return;
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(ta.value).then(()=>toast('Copied!'),()=>{ta.select();try{document.execCommand('copy');toast('Copied!')}catch(e){toast('Select the text and copy it manually.')}});
+  else{ta.select();try{document.execCommand('copy');toast('Copied!')}catch(e){toast('Select the text and copy it manually.')}}}
+document.addEventListener('click',e=>{const x=e.target.closest('[data-diag]');if(!x)return;const a=x.dataset.diag;
+  if(a==='run'){const box=document.getElementById('diag-out');if(box)mpDiagnose(box)}
+  else if(a==='srv'){const p=document.getElementById('srv-box');if(p){p.hidden=!p.hidden;if(!p.hidden)p.scrollIntoView({block:'nearest',behavior:'smooth'})}}
+  else if(a==='cjs')copyBox('srv-js');else if(a==='cpkg')copyBox('srv-pkg')});
+document.addEventListener('click',e=>{const x=e.target.closest('[data-ro]');if(!x)return;
+  const input=document.getElementById('ro-code'),v=input?input.value:'';
+  const say=m=>{const el=document.getElementById('mpmsg');if(el){el.textContent=m;el.scrollIntoView({block:'nearest'})}toast(m)};
+  go('multiplayer');
+  if(x.dataset.ro==='create')mpCreate('ringout',say);else mpJoin(v,say)});
 
 /* ---------- registry (add new games here) ---------- */
 const GAMES=[
