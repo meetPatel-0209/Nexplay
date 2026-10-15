@@ -2149,6 +2149,101 @@ document.addEventListener('click',e=>{const x=e.target.closest('[data-ro]');if(!
   go('multiplayer');
   if(x.dataset.ro==='create')mpCreate('ringout',say);else mpJoin(v,say)});
 
+/* ---------- Ring Out live over the free PeerJS service (works when hosted as a normal website) ---------- */
+function mkPeerLink(conn){
+  const H={data:[],close:[],open:[],error:[]};let closed=false;
+  const c={on(e,f){(H[e]||(H[e]=[])).push(f);if(e==='open')setTimeout(f,0);return c},
+    send(d){if(!closed){try{conn.send(d)}catch(e){}}},
+    close(){if(!closed){closed=true;try{conn.close()}catch(e){}}},
+    _in(d){H.data.forEach(f=>f(d))},
+    _close(){if(closed)return;closed=true;H.close.forEach(f=>f())}};
+  return c}
+
+function ringPeerHost(peer,code){
+  const o={host:true,code,manualAdd:rtManualAdd,sig:{stop(){try{peer.destroy()}catch(e){}}}};
+  ringNet(o);
+  peer.on('connection',conn=>{
+    let got=false;const L=mkPeerLink(conn);
+    conn.on('open',()=>{try{conn.send({t:'hello',g:'ringout',n:pname(),a:S.avatar})}catch(e){}});
+    conn.on('data',d=>{if(!got){if(d&&d.t==='hello'){got=true;if(o.addLink)o.addLink(L,{name:cleanP({name:d.n}).name,av:cleanP({av:d.a}).av})}return}L._in(d)});
+    conn.on('close',()=>L._close());conn.on('error',()=>L._close())});
+  peer.on('error',err=>toast('Connection problem: '+(err&&err.type||'unknown')))}
+
+async function rtCreate(say){
+  if(!window.RTCPeerConnection)return say('This browser does not support real-time connections.');
+  say('Creating room…');
+  if(!window.__peerBad&&await loadPeer()){const c0=mkCode(),r=await peerOpen(c0);if(r.ok)return ringPeerHost(r.peer,c0);window.__peerBad=true}
+  let code=null;
+  for(let i=0;i<4;i++){const c=mkCode(),ex=await sget('grp:'+c);if(!ex||ex.closed||Date.now()-ex.t>300000){code=c;break}}
+  let ok=false;if(code)ok=await sset('grp:'+code,{g:'ringout',host:{name:pname(),av:S.avatar},views:{},v:0,t:Date.now()});
+  if(!ok){toast('No online service reachable — use "Add a player (manual code)" to connect friends.');code=''}
+  const o={host:true,code,manualAdd:rtManualAdd};
+  if(code)o.sig=rtSignalHost(code,(c,info)=>{if(o.addLink)o.addLink(c,info)});
+  ringNet(o);if(o.sig)o.sig.start()}
+
+function mpPeerJoin(code,say){
+  return loadPeer().then(ok=>{if(!ok)return false;say('Connecting to '+code+'…');
+    return new Promise(res=>{let peer,done=false,grp=false,lk=null;
+      const fail=()=>{if(done)return;done=true;try{peer&&peer.destroy()}catch(e){}res(false)};
+      try{peer=new Peer({debug:0})}catch(e){return res(false)}
+      const t=setTimeout(fail,9000);peer.on('error',fail);
+      peer.on('open',()=>{const conn=peer.connect('nxp-'+code,{serialization:'json',reliable:true}),sh=mkShim(conn,peer);let got=false;
+        conn.on('error',fail);conn.on('open',()=>conn.send({t:'hello',n:pname(),a:S.avatar}));
+        conn.on('data',d=>{if(lk){lk._in(d);return}if(grp)return;
+          if(!got){if(d&&d.t==='hello'&&!done&&(MP[d.g]||GM[d.g])){got=true;done=true;clearTimeout(t);res(true);
+              const hn=cleanP({name:d.n}).name,ha=cleanP({av:d.a}).av;
+              if(d.g==='ringout'){lk=mkPeerLink(conn);ringNet({host:false,code,link:lk,pc:{close(){try{conn.close()}catch(e){}try{peer.destroy()}catch(e){}}},hostInfo:{name:hn,av:ha}})}
+              else if(GM[d.g]){grp=true;mpGroupGuest(d.g,conn,peer,d)}
+              else mpDirectPlay({host:false,gk:d.g,dc:sh.dc,pc:sh.pc,peer:{name:hn,av:ha}})}return}
+          sh.dc.onmessage&&sh.dc.onmessage({data:d})});
+        conn.on('close',()=>{if(lk)lk._close();else if(!grp)sh.dc.onclose&&sh.dc.onclose()})})})})}
+
+/* ---------- multiplayer lobby v7 ---------- */
+function mpLobby(){
+  const rec=S.mp||(S.mp={w:0,l:0,d:0});let busy=false;
+  const two=Object.keys(MP).map(k=>`<option value="${k}">${MP[k].name}</option>`).join('');
+  const party=Object.keys(GM).map(k=>`<option value="${k}">${GM[k].name} (${GM[k].min}–${GM[k].max} players)</option>`).join('');
+  const fld='height:50px;border-radius:12px;border:1px solid var(--bd);background:var(--card);padding:0 12px;width:100%;margin:6px 0 12px';
+  main.innerHTML=`<div class="sh"><div><h1 style="font-size:clamp(26px,5vw,36px)">Multiplayer</h1><p>Play with friends on their own phones or computers — 2 to 8 players.</p></div></div>
+  <section id="room-box" style="margin-top:0"><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))">
+    <div class="card pad"><h3>Create a room</h3><p class="muted">Pick a game, get a 6-digit code and share it with your friends.</p>
+      <label class="muted" for="cg">Game</label><select id="cg" style="${fld}"><optgroup label="Party games">${party}</optgroup><optgroup label="Two-player games">${two}</optgroup></select>
+      <button class="btn p" data-mp="create" style="width:100%;min-height:52px;font-size:16px">Create room</button></div>
+    <div class="card pad"><h3>Join a room</h3><p class="muted">Type the 6-digit code your friend gave you.</p>
+      <label class="muted" for="mpc">Room code</label><input id="mpc" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="000000" autocomplete="off" style="${fld};text-align:center;font-size:24px;letter-spacing:.25em;font-weight:800">
+      <button class="btn p" data-mp="join" style="width:100%;min-height:52px;font-size:16px">Join room</button></div>
+  </div><p class="msg" id="mpmsg" role="status" style="margin-top:12px"></p></section>
+  <div class="card pad" style="margin-top:6px"><div class="ctl"><label>Your name <input id="mpn" maxlength="16" value="${esc(pname())}" aria-label="Your name" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 10px;margin-left:6px;width:min(50vw,200px)"></label><span class="muted">${S.avatar} · ${rec.w}W · ${rec.l}L · ${rec.d}D</span></div></div>
+  ${sec('Party games','For 2–8 players, each on their own device. Create a room and share the 6-digit code.',`<div class="grid">${Object.keys(GM).map(k=>gmCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
+  ${sec('Two-player games','Online with a friend — Connect Four, Chess and Checkers.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
+  ${sec('Pass & play','Two players, one device — take turns.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play on this device','data-mp="local" data-g="'+k+'"')).join('')}</div>`)}
+  <section><div class="card pad"><h3>Not connecting?</h3><p class="muted" style="margin:6px 0 10px">Run a quick check to see what works in this app. If a 6-digit code can't be created here, put this website on a normal web host (steps below) — then every game gets a real code.</p>
+    <div class="row" style="padding:0"><button class="btn p" data-diag="run">Run connection check</button><button class="btn" data-diag="srv">How to host it</button></div>
+    <p class="msg" id="diag-out" style="text-align:left;margin-top:10px"></p>
+    <div id="srv-box" hidden style="margin-top:10px">
+      <p class="muted"><b>Easiest (no server):</b> copy this page's code, save it as <b>index.html</b> and upload it to a free static host — drag the folder onto app.netlify.com/drop, or use GitHub Pages or Vercel. On a normal website the free online service (PeerJS) works, so Create room shows a real 6-digit code for every game. Everyone opens the same website link.</p>
+      <p class="muted" style="margin-top:8px"><b>Advanced (your own server):</b> make a folder <b>nexplay</b> with <b>package.json</b>, <b>server.js</b> and <b>public/index.html</b>, run <b>npm install</b> then <b>npm start</b>, and open http://localhost:3000. Deploy to Render or Railway to go online.</p>
+      <b>package.json</b><textarea id="srv-pkg" readonly onfocus="this.select()" style="${TA};min-height:150px">${esc(SRV_PKG)}</textarea><div class="row"><button class="btn" data-diag="cpkg">Copy package.json</button></div>
+      <b>server.js</b><textarea id="srv-js" readonly onfocus="this.select()" style="${TA};min-height:260px">${esc(SRV_JS)}</textarea><div class="row"><button class="btn" data-diag="cjs">Copy server.js</button></div></div></div></section>
+  <section><details class="card pad"><summary style="font-weight:700;cursor:pointer;min-height:28px">Manual codes (last-resort backup)</summary>
+    <p class="muted" style="margin:8px 0">Only needed if 6-digit rooms can't connect. Swap two long codes by message instead.</p>
+    <div class="row" style="padding:0"><select id="dg" aria-label="Game" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 8px"><optgroup label="Party games">${party}</optgroup><optgroup label="Two-player games">${two}</optgroup></select><button class="btn" data-mp="dhost">Host with manual codes</button><button class="btn" data-mp="djoin">Join with manual codes</button></div></details></section>`;
+  const say=m=>{const e=$('#mpmsg');if(e){e.textContent=m;e.scrollIntoView({block:'nearest',behavior:'smooth'})}toast(m)};
+  const h=async e=>{if(main.onclick!==h||busy)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
+    if(a==='local')mpLocal(x.dataset.g);
+    else if(a==='dhost')mpDirectHost($('#dg').value);
+    else if(a==='djoin')mpDirectJoin();
+    else if(a==='create'){busy=true;await mpCreate(x.dataset.g||$('#cg').value,say);busy=false}
+    else if(a==='join'){busy=true;await mpJoin($('#mpc').value,say);busy=false}};
+  main.onclick=h;
+  main.oninput=e=>{if(e.target.id==='mpn'){const v=e.target.value.trim().slice(0,16);if(v){S.name=v;save()}}else if(e.target.id==='mpc')e.target.value=e.target.value.replace(/\D/g,'').slice(0,6)};
+  main.onkeydown=e=>{if(e.key==='Enter'&&e.target.id==='mpc')h({target:$('[data-mp=join]')})};
+  cleanup=()=>{main.onclick=main.oninput=main.onkeydown=null}}
+
+setTimeout(()=>{
+  INFO.About=`${BRAND} is a browser game hub with solo and vs-AI games (2048, Snake, Chess, Checkers, Sudoku-free puzzles and more), two-player online games, and party games for up to 8 players. Rooms use a 6-digit code.`;
+  INFO.FAQ='Do I need an account? No. Can more than two people play? Yes — party games and Ring Out (live) support up to 8 players, each on their own device, using a 6-digit room code. Codes work when this website is hosted on a normal web host; some app previews block the connection service. Where is my progress saved? In this browser only.'},0);
+
 /* ---------- registry (add new games here) ---------- */
 const GAMES=[
  {id:'ttt',title:'Tic-Tac-Toe',cat:'Board',mode:'Solo vs AI',added:5,quick:1,glyph:'✕ ○',grad:'linear-gradient(135deg,#7c3aed,#22d3ee)',goal:'Win a round against the AI',how:'Get three in a row. You are X. On Hard the AI never loses, so a draw is a great result.',mount:ttt},
@@ -2168,6 +2263,9 @@ const GAMES=[
  {id:'sudoku',title:'Sudoku',cat:'Puzzle',mode:'Solo',added:14,quick:0,glyph:'9',grad:'linear-gradient(135deg,#0ea5e9,#8b5cf6)',goal:'Solve a puzzle',how:'Fill every row, column and 3×3 box with 1–9 without repeats. Every puzzle has exactly one solution. Conflicts turn red, and you can use Check or Hints (−100 points each). Keyboard digits and arrows work too.',mount:sudoku},
  {id:'battle',title:'Battleship',cat:'Board',mode:'Solo vs AI',added:13,quick:0,glyph:'🚢',grad:'linear-gradient(135deg,#0c4a6e,#22d3ee)',goal:'Sink the enemy fleet',how:'Your five ships are placed at random (shuffle until you like it). Take turns firing at the 10×10 grid — the computer hunts smartly once it scores a hit. Sink all five enemy ships first to win. Fewer shots means a higher score.',mount:battle},
  {id:'ringout',title:'Ring Out',cat:'Arcade',mode:'Solo vs AI',added:17,quick:0,glyph:'🥊',grad:'linear-gradient(135deg,#f43f8e,#8b5cf6,#22d3ee)',goal:'Win a match',how:'A couch-style party brawler: shove rivals off a platform that keeps shrinking — last fighter standing wins the round. Play alone against bots, or with up to 3 friends on one keyboard (P1: WASD + Space, P2: arrows + Enter, P3: IJKL + U). On a phone, use the joystick and the DASH button.',mount:ringout}];
+for(const id of ['ttt','rps','mem','pulse','lights','sudoku']){const i=GAMES.findIndex(g=>g.id===id);if(i>=0)GAMES.splice(i,1)}
+delete MP.ttt;delete MP.rps;
+{const i=ACH.findIndex(a=>a[1]==='Sharp Memory');if(i>=0)ACH.splice(i,1)}
 const PLANNED=['Quiz Battle','Trivia Challenge','Word Guessing Game'];
 const byId=id=>GAMES.find(g=>g.id===id);
 const dailyGame=()=>GAMES[[...today()].reduce((a,c)=>a+c.charCodeAt(0),0)%GAMES.length];
