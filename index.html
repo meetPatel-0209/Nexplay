@@ -909,7 +909,7 @@ const dShell=(t,b)=>`<div class="gh"><button class="btn" data-mp="lobby">← Bac
 async function copyText(t){try{await navigator.clipboard.writeText(t);toast('Copied!')}catch(e){const ta=$('#dout');if(ta){ta.focus();ta.select();try{document.execCommand('copy');toast('Copied!')}catch(er){toast('Select the code and copy it manually.')}}}}
 
 async function mpDirectHost(gk){
-  if(GM[gk])return mpGroupHostManual(gk);
+  if(gk==='ringout')return rtCreate(()=>{});if(GM[gk])return mpGroupHostManual(gk);
   const G=MP[gk];if(!G)return;
   if(!window.RTCPeerConnection)return toast('Direct connection isn\'t supported in this browser.');
   let pc,dc,alive=true,peer=null;
@@ -1563,6 +1563,430 @@ function mpLobby(){
 
 setTimeout(()=>{INFO.FAQ='Do I need an account? No. Can more than two people play? Yes — party games support up to 8 players, each on their own device. Create a room to get a 6-digit code; friends join with that code. Rooms connect through a free online service when available, otherwise through the app\'s shared storage, otherwise through manual codes. Where is my progress saved? In this browser only.'},0);
 
+/* ---------- Ring Out: couch-style party brawler (1–8 fighters, local players + bots) ---------- */
+document.head.appendChild(Object.assign(document.createElement('style'),{textContent:`
+.ro-ctl{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;user-select:none;-webkit-user-select:none}
+#ro-joy{width:150px;height:150px;border-radius:50%;background:rgba(255,255,255,.08);border:2px solid var(--bd);position:relative;touch-action:none}
+#ro-nub{position:absolute;width:60px;height:60px;left:45px;top:45px;border-radius:50%;background:var(--p);box-shadow:0 0 18px rgba(139,92,246,.6);pointer-events:none}
+#ro-dash{width:118px;height:118px;border-radius:50%;font-size:18px;touch-action:none;user-select:none;-webkit-user-select:none}
+`}));
+function ringout(el,ctx){
+  const COLORS=['#f43f8e','#22d3ee','#a3e635','#f59e0b','#8b5cf6','#ef4444','#38bdf8','#fb7185'];
+  const KM=[{u:'w',d:'s',l:'a',r:'d',x:' '},{u:'ArrowUp',d:'ArrowDown',l:'ArrowLeft',r:'ArrowRight',x:'Enter'},{u:'i',d:'k',l:'j',r:'l',x:'u'}];
+  const touch=(window.matchMedia&&matchMedia('(pointer:coarse)').matches)||'ontouchstart' in window;
+  const CX=500,CY=500,R0=440,PR=28,ACC=1500,DASH=820,KICK=420;
+  let cfg={humans:1,bots:3,win:3},P=[],state='setup',tcount=0,t=0,round=0,Rcur=R0,raf=0,last=0,paused=false,cv=null,cx=null,W=360,sc=.36,winner=-1,endT=0,goT=0;
+  const joy={x:0,y:0},down={};
+  const opt=(arr,cur)=>arr.map(n=>`<option value="${n}" ${n===cur?'selected':''}>${n}</option>`).join('');
+
+  function setup(){state='setup';cancelAnimationFrame(raf);paused=false;
+    el.innerHTML=`<div class="card pad"><h3>Ring Out</h3><p class="muted" style="margin:6px 0 12px">Shove your rivals off a shrinking platform. Last one standing wins the round — first to ${cfg.win} round wins takes the match.</p>
+    <div class="ctl"><label>Players on this device <select id="ro-h">${opt([1,2,3],cfg.humans)}</select></label><label>Bots <select id="ro-b">${opt([0,1,2,3,4,5,6,7],cfg.bots)}</select></label><label>First to <select id="ro-w">${opt([2,3,5],cfg.win)}</select></label></div>
+    <p class="muted" style="margin:12px 0">${touch?'Touch: drag the joystick to move, tap DASH to shove (Player 1). ':''}Keyboard — P1: W A S D + Space · P2: Arrow keys + Enter · P3: I J K L + U. Dash has a short cooldown.</p>
+    <button class="btn p" id="ro-go" style="width:100%">Start match</button></div>`}
+
+  function startMatch(){
+    cfg.humans=+$('#ro-h',el).value;cfg.bots=Math.min(+$('#ro-b',el).value,8-cfg.humans);cfg.win=+$('#ro-w',el).value;if(cfg.humans+cfg.bots<2)cfg.bots=1;
+    P=[];for(let i=0;i<cfg.humans;i++)P.push({human:true,key:i,name:'P'+(i+1)});
+    for(let i=0;i<cfg.bots;i++)P.push({human:false,name:'Bot '+(i+1),skill:.5+Math.random()*.5});
+    P.forEach((p,i)=>{p.id=i;p.col=COLORS[i];p.wins=0;p.kos=0});
+    round=0;winner=-1;paused=false;
+    el.innerHTML=`<div id="ro-hud" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center"></div><canvas id="ro-cv" style="max-width:520px"></canvas><p class="msg" id="ro-msg" role="status"></p>
+    ${touch?'<div class="ro-ctl"><div id="ro-joy"><i id="ro-nub"></i></div><button class="btn p" id="ro-dash">DASH</button></div>':''}
+    <div class="row" style="justify-content:center"><button class="btn" id="ro-pz">Pause</button><button class="btn" id="ro-quit">Quit</button></div>`;
+    cv=$('#ro-cv',el);W=Math.min(el.clientWidth||360,520);cv.width=cv.height=W;sc=W/1000;cx=cv.getContext('2d');
+    if(touch){const j=$('#ro-joy',el),n=$('#ro-nub',el);let act=false;
+      const mv=e=>{const r=j.getBoundingClientRect();let dx=(e.clientX-(r.left+r.width/2))/55,dy=(e.clientY-(r.top+r.height/2))/55;const l=Math.hypot(dx,dy);if(l>1){dx/=l;dy/=l}joy.x=dx;joy.y=dy;n.style.left=(45+dx*45)+'px';n.style.top=(45+dy*45)+'px'};
+      const up=()=>{act=false;joy.x=joy.y=0;n.style.left='45px';n.style.top='45px'};
+      j.addEventListener('pointerdown',e=>{act=true;try{j.setPointerCapture(e.pointerId)}catch(er){}mv(e)});
+      j.addEventListener('pointermove',e=>{if(act)mv(e)});j.addEventListener('pointerup',up);j.addEventListener('pointercancel',up);
+      $('#ro-dash',el).addEventListener('pointerdown',e=>{e.preventDefault();if(P[0]&&P[0].human)P[0].dashReq=true})}
+    newRound();last=performance.now();cancelAnimationFrame(raf);raf=requestAnimationFrame(frame)}
+
+  function renderHud(){const h=$('#ro-hud',el);if(!h)return;
+    h.innerHTML=P.map(p=>`<span class="badge" style="border-color:${p.col};display:inline-flex;gap:6px;align-items:center"><i style="width:10px;height:10px;border-radius:50%;background:${p.col};display:inline-block"></i>${p.name} · ${p.wins}</span>`).join('')+`<span class="badge">Round ${round} · first to ${cfg.win}</span>`}
+
+  function newRound(){round++;const n=P.length;
+    P.forEach((p,i)=>{const a=i/n*Math.PI*2-Math.PI/2;p.x=CX+Math.cos(a)*270;p.y=CY+Math.sin(a)*270;p.vx=p.vy=0;p.alive=true;p.falling=false;p.fall=0;p.cd=0;p.dashT=0;p.dashReq=false;p.fx=-Math.cos(a);p.fy=-Math.sin(a);p.hit=null;p.hitT=0});
+    t=0;Rcur=R0;state='cd';tcount=3;goT=0;const m=$('#ro-msg',el);if(m)m.textContent='';renderHud()}
+
+  function bot(p,dt){
+    const dc=Math.hypot(p.x-CX,p.y-CY);let ix=0,iy=0,tgt=null,bd=1e9;
+    for(const q of P){if(q===p||!q.alive||q.falling)continue;const d=Math.hypot(q.x-p.x,q.y-p.y);if(d<bd){bd=d;tgt=q}}
+    if(dc>Rcur*0.7){ix=CX-p.x;iy=CY-p.y;if(dc>Rcur*0.88&&p.cd<=0&&Math.random()<dt*4){const l0=Math.hypot(ix,iy)||1;p.fx=ix/l0;p.fy=iy/l0;p.dashReq=true}}
+    else if(tgt){const tx=tgt.x-CX,ty=tgt.y-CY,tl=Math.hypot(tx,ty)||1;ix=tgt.x-tx/tl*50-p.x;iy=tgt.y-ty/tl*50-p.y;
+      if(bd<120&&p.cd<=0&&Math.random()<dt*2.5*p.skill){p.fx=(tgt.x-p.x)/bd;p.fy=(tgt.y-p.y)/bd;p.dashReq=true}}
+    const l=Math.hypot(ix,iy)||1;ix/=l;iy/=l;p.wob=(p.wob||0)+dt;
+    ix+=Math.sin(p.wob*3+p.id)*.25*(1-p.skill);iy+=Math.cos(p.wob*2+p.id)*.25*(1-p.skill);
+    return[ix,iy]}
+
+  function control(dt){
+    for(const p of P){if(!p.alive||p.falling)continue;let ix=0,iy=0;
+      if(p.human){const m=KM[p.key];if(down[m.l])ix--;if(down[m.r])ix++;if(down[m.u])iy--;if(down[m.d])iy++;if(p.key===0&&touch){ix+=joy.x;iy+=joy.y}}
+      else{const v=bot(p,dt);ix=v[0];iy=v[1]}
+      const l=Math.hypot(ix,iy);if(l>1){ix/=l;iy/=l}
+      p.vx+=ix*ACC*dt;p.vy+=iy*ACC*dt;
+      if(l>0.15){p.fx+=(ix/l-p.fx)*Math.min(1,dt*14);p.fy+=(iy/l-p.fy)*Math.min(1,dt*14);const fl=Math.hypot(p.fx,p.fy)||1;p.fx/=fl;p.fy/=fl}
+      p.cd=Math.max(0,p.cd-dt);p.dashT=Math.max(0,p.dashT-dt);
+      if(p.dashReq){p.dashReq=false;if(p.cd<=0){p.vx+=p.fx*DASH;p.vy+=p.fy*DASH;p.cd=1.5;p.dashT=.28;ctx.beep(520,.05)}}}}
+
+  function physics(dt){
+    const dmp=Math.exp(-3.2*dt);
+    for(const p of P){if(!p.alive)continue;p.vx*=dmp;p.vy*=dmp;p.x+=p.vx*dt;p.y+=p.vy*dt;p.hitT=Math.max(0,p.hitT-dt)}
+    for(let i=0;i<P.length;i++)for(let j=i+1;j<P.length;j++){const a=P[i],b=P[j];if(!a.alive||!b.alive||a.falling||b.falling)continue;
+      let dx=b.x-a.x,dy=b.y-a.y;const d=Math.hypot(dx,dy);if(d>=PR*2||d===0)continue;
+      const nx=dx/d,ny=dy/d,ov=(PR*2-d)/2;a.x-=nx*ov;a.y-=ny*ov;b.x+=nx*ov;b.y+=ny*ov;
+      const rv=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny;
+      if(rv>0){const imp=rv*.95+40;a.vx-=nx*imp;a.vy-=ny*imp;b.vx+=nx*imp;b.vy+=ny*imp;if(rv>250)ctx.beep(210,.05)}
+      if(a.dashT>0){b.vx+=nx*KICK;b.vy+=ny*KICK;a.vx-=nx*KICK*.3;a.vy-=ny*KICK*.3}
+      if(b.dashT>0){a.vx-=nx*KICK;a.vy-=ny*KICK;b.vx+=nx*KICK*.3;b.vy+=ny*KICK*.3}
+      a.hit=b.id;a.hitT=2.5;b.hit=a.id;b.hitT=2.5}
+    for(const p of P){if(!p.alive)continue;
+      if(!p.falling){if(Math.hypot(p.x-CX,p.y-CY)>Rcur+PR*.4){p.falling=true;p.fall=0;if(p.hit!=null&&p.hitT>0&&P[p.hit].alive&&!P[p.hit].falling)P[p.hit].kos++;ctx.beep(160,.25)}}
+      else{p.fall+=dt/.7;if(p.fall>=1)p.alive=false}}}
+
+  function update(dt){
+    if(state==='cd'){tcount-=dt;if(tcount<=0){state='play';t=0;goT=.7}return}
+    if(state==='end'){physics(dt);endT-=dt;if(endT<=0)afterRound();return}
+    if(state!=='play')return;
+    t+=dt;goT=Math.max(0,goT-dt);Rcur=Math.max(110,R0-Math.max(0,t-4)*17);
+    control(dt);physics(dt);
+    const live=P.filter(p=>p.alive&&!p.falling);
+    if(live.length<=1){state='end';endT=2.4;winner=live.length?live[0].id:-1;if(winner>=0)P[winner].wins++;renderHud();ctx.beep(winner>=0?700:200,.2)}}
+
+  function afterRound(){const m=P.find(p=>p.wins>=cfg.win);
+    if(!m){newRound();return}
+    state='over';winner=m.id;
+    const score=P[0].wins*100+P[0].kos*20;
+    if(m.id===0)ctx.rec('win',score);else if(!m.human)ctx.rec('loss',score);else ctx.rec('play',score);
+    renderHud();const msg=$('#ro-msg',el);if(msg)msg.innerHTML=`🏆 ${m.name} wins the match! <button class="btn p" id="ro-again">Play again</button>`}
+
+  function draw(){
+    const s=sc;cx.clearRect(0,0,W,W);
+    const g=cx.createLinearGradient(0,0,0,W);g.addColorStop(0,'#0b1030');g.addColorStop(1,'#1a0f3a');cx.fillStyle=g;cx.fillRect(0,0,W,W);
+    cx.beginPath();cx.arc(CX*s,CY*s,R0*s,0,7);cx.strokeStyle='rgba(255,255,255,.08)';cx.lineWidth=2;cx.stroke();
+    const rg=cx.createRadialGradient(CX*s,CY*s,10,CX*s,CY*s,Math.max(10,Rcur*s));rg.addColorStop(0,'#3b3585');rg.addColorStop(1,'#241f66');
+    cx.beginPath();cx.arc(CX*s,CY*s,Rcur*s,0,7);cx.fillStyle=rg;cx.fill();cx.lineWidth=5;cx.strokeStyle=(state==='play'&&t>4)?'#f43f8e':'#22d3ee';cx.stroke();
+    for(const p of P){if(!p.alive)continue;
+      const sf=p.falling?Math.max(.2,1-p.fall*.8):1,r=PR*s*sf;cx.globalAlpha=p.falling?Math.max(0,1-p.fall):1;
+      const px=p.x*s,py=p.y*s;
+      cx.beginPath();cx.arc(px,py+r*.25,r,0,7);cx.fillStyle='rgba(0,0,0,.3)';cx.fill();
+      cx.beginPath();cx.arc(px,py,r,0,7);cx.fillStyle=p.col;cx.fill();cx.lineWidth=p.human?3:1.5;cx.strokeStyle=p.human?'#fff':'rgba(0,0,0,.45)';cx.stroke();
+      const ex=p.fx,ey=p.fy,qx=-ey,qy=ex;
+      for(const sd of[-1,1]){const ox=px+ex*r*.35+qx*sd*r*.35,oy=py+ey*r*.35+qy*sd*r*.35;cx.beginPath();cx.arc(ox,oy,r*.27,0,7);cx.fillStyle='#fff';cx.fill();cx.beginPath();cx.arc(ox+ex*r*.09,oy+ey*r*.09,r*.12,0,7);cx.fillStyle='#111';cx.fill()}
+      if(!p.falling){cx.beginPath();if(p.cd>0)cx.arc(px,py,r+5*s,-Math.PI/2,-Math.PI/2+Math.PI*2*(1-p.cd/1.5));else cx.arc(px,py,r+5*s,0,7);cx.strokeStyle=p.cd>0?'rgba(255,255,255,.7)':'rgba(163,230,53,.7)';cx.lineWidth=2.5;cx.stroke();
+        cx.fillStyle='#fff';cx.font='bold '+Math.max(9,11*s*2)+'px system-ui';cx.textAlign='center';cx.fillText(p.human?p.name:'BOT',px,py-r-8*s)}
+      cx.globalAlpha=1}
+    cx.textAlign='center';cx.fillStyle='#fff';cx.shadowColor='rgba(0,0,0,.6)';cx.shadowBlur=8;
+    if(paused){cx.font='bold '+80*s+'px system-ui';cx.fillText('Paused',W/2,W/2)}
+    else if(state==='cd'){cx.font='bold '+150*s+'px system-ui';cx.fillText(String(Math.max(1,Math.ceil(tcount))),W/2,W/2+50*s)}
+    else if(state==='play'&&goT>0){cx.font='bold '+110*s+'px system-ui';cx.fillText('GO!',W/2,W/2+40*s)}
+    else if(state==='end'){cx.font='bold '+60*s+'px system-ui';cx.fillText(winner>=0?P[winner].name+' wins the round!':'Draw!',W/2,W/2)}
+    cx.shadowBlur=0}
+
+  function frame(ts){raf=requestAnimationFrame(frame);const dt=Math.min(.033,(ts-last)/1000||0);last=ts;
+    if(state==='setup')return;if(!paused)update(dt);draw()}
+
+  const norm=e=>e.key.length===1?e.key.toLowerCase():e.key;
+  const kd=e=>{if(state==='setup'||!cv)return;if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT')return;const k=norm(e);let used=false;
+    KM.forEach((m,i)=>{if(i>=cfg.humans)return;if(k===m.u||k===m.d||k===m.l||k===m.r){down[k]=true;used=true}if(k===m.x){used=true;if(!e.repeat&&P[i]&&P[i].human)P[i].dashReq=true}});
+    if(used)e.preventDefault();
+    if(k==='p'&&state!=='over'){paused=!paused;const b=$('#ro-pz',el);if(b)b.textContent=paused?'Resume':'Pause'}};
+  const ku=e=>{delete down[norm(e)]};
+  const vis=()=>{if(document.hidden&&state!=='setup'&&state!=='over'&&!paused){paused=true;const b=$('#ro-pz',el);if(b)b.textContent='Resume'}};
+  document.addEventListener('keydown',kd);document.addEventListener('keyup',ku);document.addEventListener('visibilitychange',vis);
+
+  el.onclick=e=>{const x=e.target.closest('button');if(!x)return;
+    if(x.id==='ro-go')startMatch();
+    else if(x.id==='ro-pz'){if(state!=='over'){paused=!paused;x.textContent=paused?'Resume':'Pause'}x.blur()}
+    else if(x.id==='ro-quit'){setup()}
+    else if(x.id==='ro-again'){startMatch()}};
+  setup();
+  return()=>{cancelAnimationFrame(raf);document.removeEventListener('keydown',kd);document.removeEventListener('keyup',ku);document.removeEventListener('visibilitychange',vis)}}
+
+/* ---------- Ring Out LIVE: real-time online brawl over WebRTC (6-digit code via shared storage, manual codes as backup) ---------- */
+GM.ringout={name:'Ring Out (live)',glyph:'🥊',meta:'Real-time arena brawl',grad:'linear-gradient(135deg,#f43f8e,#8b5cf6,#22d3ee)',min:2,max:8,
+  how:'A live arena brawl: shove rivals off a shrinking platform. Friends join from their own phones or computers with the 6-digit code; bots can fill empty spots.'};
+const roOpt=(arr,cur)=>arr.map(n=>`<option value="${n}" ${n===cur?'selected':''}>${n}</option>`).join('');
+let rtAddEl=null;
+function rtCloseAdd(){if(rtAddEl){rtAddEl.remove();rtAddEl=null}}
+
+function rtSignalHost(code,onLink){
+  const KR='grp:'+code,KO=KR+':o:',KA=KR+':r:',seen={},pcs=[];let alive=true,busy=false,timer=null,hb=null;
+  async function offer(gid,o){try{const pc=new RTCPeerConnection(RTC_CFG);pcs.push(pc);
+    pc.ondatachannel=ev=>{const dc=ev.channel,go=()=>{if(alive)onLink(rtcConn(dc),{name:cleanP({name:o.n}).name,av:cleanP({av:o.a}).av})};if(dc.readyState==='open')go();else dc.onopen=go};
+    await pc.setRemoteDescription({type:'offer',sdp:o.s});await pc.setLocalDescription(await pc.createAnswer());await iceDone(pc);
+    await sset(KA+gid,{s:pc.localDescription.sdp})}catch(e){}}
+  async function poll(){if(busy||!alive)return;busy=true;
+    try{const L=await tmo(window.storage.list(KO,true),4000),keys=(L&&L.keys)||[];
+      for(const k of keys){const ks=String(k),gid=ks.startsWith(KO)?ks.slice(KO.length):ks;if(seen[gid])continue;
+        const o=await sget(KO+gid);if(!o||typeof o.s!=='string'||o.s.length>20000)continue;seen[gid]=1;offer(gid,o)}}catch(e){}
+    busy=false}
+  return{start(){timer=setInterval(poll,1100);hb=setInterval(()=>{sset(KR,{g:'ringout',host:{name:pname(),av:S.avatar},views:{},v:0,t:Date.now()})},20000);poll()},
+    stop(){alive=false;clearInterval(timer);clearInterval(hb);pcs.forEach(p=>{try{p.close()}catch(e){}});try{window.storage.delete(KR,true)}catch(e){}}}}
+
+async function rtJoin(code,say,r0){
+  if(!window.RTCPeerConnection){say('This browser does not support real-time connections.');return true}
+  const r=r0||await sget('grp:'+code);if(!r||r.closed||r.g!=='ringout')return false;
+  say('Connecting… this can take a few seconds');
+  const KO='grp:'+code+':o:',KA='grp:'+code+':r:',gid=pid();let pc,dc;
+  try{pc=new RTCPeerConnection(RTC_CFG);dc=pc.createDataChannel('g')}catch(e){say('Could not start a real-time connection here.');return true}
+  try{await pc.setLocalDescription(await pc.createOffer());await iceDone(pc)}catch(e){say('Could not prepare the connection.');return true}
+  if(!(await sset(KO+gid,{n:pname(),a:S.avatar,s:pc.localDescription.sdp}))){try{pc.close()}catch(e){}return false}
+  let opened=false,gotAns=false;const t0=Date.now();dc.onopen=()=>{opened=true};
+  while(Date.now()-t0<45000&&!opened){
+    if(!gotAns){const a=await sget(KA+gid);if(a&&typeof a.s==='string'){gotAns=true;try{await pc.setRemoteDescription({type:'answer',sdp:a.s})}catch(e){}}}
+    await new Promise(res=>setTimeout(res,800))}
+  try{window.storage.delete(KO+gid,true);window.storage.delete(KA+gid,true)}catch(e){}
+  if(!opened){try{pc.close()}catch(e){}say('Could not connect. Try again, or ask the host to use "Add a player (manual code)".');return true}
+  ringNet({host:false,code,link:rtcConn(dc),pc,hostInfo:{name:cleanP({name:r.host&&r.host.name}).name,av:cleanP({av:r.host&&r.host.av}).av}});
+  return true}
+
+function rtManualAdd(onLink){
+  if(!window.RTCPeerConnection)return toast('Direct connection isn\'t supported in this browser.');
+  rtCloseAdd();
+  let pc,dc;try{pc=new RTCPeerConnection(RTC_CFG);dc=pc.createDataChannel('g')}catch(e){return toast('Could not start a direct connection here.')}
+  const el=document.createElement('div');rtAddEl=el;
+  el.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:80;display:grid;place-items:center;padding:16px';
+  el.innerHTML='<div class="card pad" style="max-width:560px;width:100%;max-height:90vh;overflow:auto;background:var(--bg2)"><h3>Add a player</h3><p class="muted" id="gast">Creating invite code…</p><div id="gabody"></div><div class="row"><button class="btn" id="gacl">Close</button></div></div>';
+  document.body.appendChild(el);
+  const st=m=>{const e=el.querySelector('#gast');if(e)e.textContent=m};let peer={name:'Friend',av:'🎮'};
+  el.querySelector('#gacl').onclick=()=>{if(rtAddEl===el)rtCloseAdd()};
+  dc.onopen=()=>{if(rtAddEl===el)rtCloseAdd();onLink(rtcConn(dc),peer)};
+  pc.onconnectionstatechange=()=>{if(pc.connectionState==='failed')st('Could not connect — try both devices on the same Wi-Fi.')};
+  (async()=>{try{await pc.setLocalDescription(await pc.createOffer());await iceDone(pc);
+    const code=b64e({g:'ringout',grp:1,n:pname(),a:S.avatar,s:pc.localDescription.sdp});
+    el.querySelector('#gabody').innerHTML=`<p><b>Step 1</b> — send this invite code to the player:</p><textarea id="dout" readonly onfocus="this.select()" style="${TA}">${code}</textarea><div class="row"><button class="btn p" id="gacp">Copy invite code</button></div><p style="margin-top:12px"><b>Step 2</b> — paste the reply code they send back:</p><textarea id="gin" style="${TA}" placeholder="Paste reply code here"></textarea><div class="row"><button class="btn p" id="gaap">Connect</button></div>`;
+    st('Waiting for the player…');
+    el.querySelector('#gacp').onclick=()=>copyText(code);
+    el.querySelector('#gaap').onclick=async()=>{try{const r=b64d(el.querySelector('#gin').value);if(typeof r.s!=='string'||r.s.length>20000)throw 0;peer={name:cleanP({name:r.n}).name,av:cleanP({av:r.a}).av};st('Connecting…');await pc.setRemoteDescription({type:'answer',sdp:r.s})}catch(er){st('That reply code isn\'t valid. Paste the whole code.')}}}
+  catch(er){st('Could not create an invite code on this network.')}})()}
+
+async function rtCreate(say){
+  if(!window.RTCPeerConnection)return say('This browser does not support real-time connections.');
+  say('Creating room…');let code=null;
+  for(let i=0;i<4;i++){const c=mkCode(),ex=await sget('grp:'+c);if(!ex||ex.closed||Date.now()-ex.t>300000){code=c;break}}
+  let ok=false;if(code)ok=await sset('grp:'+code,{g:'ringout',host:{name:pname(),av:S.avatar},views:{},v:0,t:Date.now()});
+  if(!ok){toast('Shared storage unavailable — use "Add a player (manual code)" to connect friends.');code=''}
+  const o={host:true,code,manualAdd:rtManualAdd};
+  if(code)o.sig=rtSignalHost(code,(c,info)=>{if(o.addLink)o.addLink(c,info)});
+  ringNet(o);if(o.sig)o.sig.start()}
+
+function ringNet(o){
+  const host=!!o.host,code=o.code||'';
+  const COLORS=['#f43f8e','#22d3ee','#a3e635','#f59e0b','#8b5cf6','#ef4444','#38bdf8','#fb7185'];
+  const CX=500,CY=500,R0=440,PR=28,ACC=1500,DASH=820,KICK=420;
+  const touch=(window.matchMedia&&matchMedia('(pointer:coarse)').matches)||'ontouchstart' in window;
+  const hi=o.hostInfo||{name:'Host',av:'🎮'};
+  let P=host?[{id:0,name:pname(),av:S.avatar,human:true,local:true,on:true}]:[{id:0,name:hi.name,av:hi.av,human:true,on:true}];
+  let state='lobby',tcount=0,t=0,round=0,Rcur=R0,goT=0,winner=-1,endT=0,alive=true,raf=0,last=0,lastSend=0,you=host?0:-1,dead=false,counted=false,shown=false,lastIn='',sentAt=0,hudKey='',hiAt=0,cv=null,cx=null,W=360,sc=.36,lt=0;
+  const cfg={bots:2,win:3},joy={x:0,y:0},down={};
+  const send=(l,m)=>{try{l.send(m)}catch(e){}};
+  main.innerHTML=`<div class="gh"><button class="btn" data-mp="lobby">← Leave</button><div class="sp"><h2>Ring Out · Live</h2><span class="badge">${host?'Hosting':'Joined'}</span></div></div>
+  <div class="stage" style="max-width:560px"><div id="rn-lobby"></div><div id="rn-game" hidden>
+  <div id="rn-hud" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center"></div><canvas id="rn-cv" style="max-width:520px"></canvas><p class="msg" id="rn-msg" role="status"></p>
+  ${touch?'<div class="ro-ctl"><div id="ro-joy"><i id="ro-nub"></i></div><button class="btn p" id="ro-dash">DASH</button></div>':''}</div></div>`;
+
+  function renderLobby(){const b=$('#rn-lobby');if(!b)return;
+    const pl=P.map((p,i)=>`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:22px">${p.av}</span><b>${esc(p.name)}</b><span class="muted">${i===0?'host':''}${i===you?' · you':''}</span><span style="width:9px;height:9px;border-radius:50%;display:inline-block;background:${p.on===false?'#ef4444':'#22c55e'}"></span></div>`).join('');
+    b.innerHTML=`<div class="card pad"><div class="ctl"><div><span class="muted">Room code</span><div style="font-size:${code?34:20}px;font-weight:900;letter-spacing:.2em">${code?esc(code):'Manual codes'}</div></div>${host&&code?'<button class="btn" data-rn="copy">Copy code</button>':''}</div>
+    <p class="muted" style="margin:8px 0">Shove rivals off a shrinking platform. Last fighter standing wins the round; first to ${cfg.win} round wins takes the match. ${touch?'Touch: joystick + DASH.':'Move: WASD or arrows · Dash: Space.'}</p>
+    <b>Players (${P.length}/8)</b><div style="display:grid;gap:8px;margin-top:8px">${pl}</div>
+    ${host?`<div class="ctl" style="margin-top:12px"><label>Bots <select id="rn-b2">${roOpt([0,1,2,3,4,5,6,7],cfg.bots)}</select></label><label>First to <select id="rn-w">${roOpt([2,3,5],cfg.win)}</select></label></div><div class="row" style="padding-top:12px"><button class="btn p" data-rn="start">Start match</button><button class="btn" data-rn="add">➕ Add a player (manual code)</button></div>`:'<p class="msg">Waiting for the host to start…</p>'}</div>`}
+
+  function renderHud(){const k=round+'|'+P.map(p=>p.wins).join();if(k===hudKey)return;hudKey=k;const h=$('#rn-hud');if(!h)return;
+    h.innerHTML=P.map(p=>`<span class="badge" style="border-color:${p.col||'var(--bd)'};display:inline-flex;gap:6px;align-items:center"><i style="width:10px;height:10px;border-radius:50%;background:${p.col||'#888'};display:inline-block"></i>${esc(p.name)} · ${p.wins||0}</span>`).join('')+`<span class="badge">Round ${round} · first to ${cfg.win}</span>`}
+
+  function wireTouch(){if(!touch)return;const j=$('#ro-joy'),n=$('#ro-nub');if(!j)return;let act=false;
+    const mv=e=>{const r=j.getBoundingClientRect();let dx=(e.clientX-(r.left+r.width/2))/55,dy=(e.clientY-(r.top+r.height/2))/55;const l=Math.hypot(dx,dy);if(l>1){dx/=l;dy/=l}joy.x=dx;joy.y=dy;n.style.left=(45+dx*45)+'px';n.style.top=(45+dy*45)+'px'};
+    const up=()=>{act=false;joy.x=joy.y=0;n.style.left='45px';n.style.top='45px'};
+    j.addEventListener('pointerdown',e=>{act=true;try{j.setPointerCapture(e.pointerId)}catch(er){}mv(e)});
+    j.addEventListener('pointermove',e=>{if(act)mv(e)});j.addEventListener('pointerup',up);j.addEventListener('pointercancel',up);
+    const d=$('#ro-dash');if(d)d.addEventListener('pointerdown',e=>{e.preventDefault();dashNow()})}
+  function showGame(){const l=$('#rn-lobby'),g=$('#rn-game');if(l)l.hidden=true;if(g)g.hidden=false;
+    if(!cv){cv=$('#rn-cv');W=Math.min((g&&g.clientWidth)||360,520);cv.width=cv.height=W;sc=W/1000;cx=cv.getContext('2d');wireTouch()}
+    hudKey='';renderHud()}
+  function dashNow(){if(host){if(P[0])P[0].dashReq=true}else if(!dead)send(o.link,{t:'dash'})}
+  function localVec(){let ix=0,iy=0;if(down.a||down.ArrowLeft)ix--;if(down.d||down.ArrowRight)ix++;if(down.w||down.ArrowUp)iy--;if(down.s||down.ArrowDown)iy++;if(touch){ix+=joy.x;iy+=joy.y}
+    const l=Math.hypot(ix,iy);if(l>1){ix/=l;iy/=l}return[ix,iy]}
+  function sendIn(){if(host||dead||state==='lobby')return;const v=localVec(),key=v[0].toFixed(2)+','+v[1].toFixed(2),now=performance.now();
+    if(key!==lastIn||now-sentAt>300){lastIn=key;sentAt=now;send(o.link,{t:'in',x:+v[0].toFixed(2),y:+v[1].toFixed(2)})}}
+
+  /* ----- host: lobby + simulation ----- */
+  function sendLobby(){P.forEach(p=>{if(p.remote&&p.on!==false)send(p.link,{t:'lobby',ps:P.map(q=>({n:q.name,a:q.av,on:q.on!==false})),you:p.id,win:cfg.win})})}
+  function sendStart(p){send(p.link,{t:'start',ps:P.map(q=>({n:q.name,a:q.av,h:q.human})),you:p.id,win:cfg.win})}
+  function addLink(conn,info){if(!alive)return;
+    if(state!=='lobby'||P.length>=8){send(conn,{t:'full'});setTimeout(()=>conn.close(),300);return}
+    const p={id:P.length,name:info.name,av:info.av,human:true,remote:true,on:true,link:conn,inp:{x:0,y:0},dashReq:false};P.push(p);
+    conn.on('data',m=>{if(!m||typeof m!=='object')return;
+      if(m.t==='in'){const x=+m.x,y=+m.y;if(Number.isFinite(x)&&Number.isFinite(y)){p.inp.x=Math.max(-1,Math.min(1,x));p.inp.y=Math.max(-1,Math.min(1,y))}}
+      else if(m.t==='dash')p.dashReq=true;
+      else if(m.t==='hi'){if(state==='lobby')sendLobby();else sendStart(p)}});
+    conn.on('close',()=>{p.on=false;if(state==='lobby')renderLobby();else if(p.alive&&!p.falling){p.falling=true;p.fall=0}});
+    sendLobby();renderLobby();beep(600,.08)}
+  function startMatch(){
+    const humans=P.filter(p=>p.on!==false);const nb=Math.min(cfg.bots,8-humans.length);
+    if(humans.length+nb<2)return toast('Need at least 2 fighters — add bots or friends.');
+    P=humans;for(let i=0;i<nb;i++)P.push({name:'Bot '+(i+1),av:'🤖',human:false,skill:.5+Math.random()*.5,on:true});
+    P.forEach((p,i)=>{p.id=i;p.col=COLORS[i];p.wins=0;p.kos=0});
+    round=0;winner=-1;counted=false;shown=false;
+    P.forEach(p=>{if(p.remote)sendStart(p)});
+    showGame();newRound()}
+  function newRound(){round++;const n=P.length;
+    P.forEach((p,i)=>{const a=i/n*Math.PI*2-Math.PI/2;p.x=CX+Math.cos(a)*270;p.y=CY+Math.sin(a)*270;p.vx=p.vy=0;p.alive=true;p.falling=false;p.fall=0;p.cd=0;p.dashT=0;p.dashReq=false;p.fx=-Math.cos(a);p.fy=-Math.sin(a);p.hit=null;p.hitT=0});
+    t=0;Rcur=R0;state='cd';tcount=3;goT=0;shown=false;const m=$('#rn-msg');if(m)m.innerHTML='';hudKey='';renderHud()}
+  function bot(p,dt){
+    const dc=Math.hypot(p.x-CX,p.y-CY);let ix=0,iy=0,tgt=null,bd=1e9;
+    for(const q of P){if(q===p||!q.alive||q.falling)continue;const d=Math.hypot(q.x-p.x,q.y-p.y);if(d<bd){bd=d;tgt=q}}
+    if(dc>Rcur*0.7){ix=CX-p.x;iy=CY-p.y;if(dc>Rcur*0.88&&p.cd<=0&&Math.random()<dt*4){const l0=Math.hypot(ix,iy)||1;p.fx=ix/l0;p.fy=iy/l0;p.dashReq=true}}
+    else if(tgt){const tx=tgt.x-CX,ty=tgt.y-CY,tl=Math.hypot(tx,ty)||1;ix=tgt.x-tx/tl*50-p.x;iy=tgt.y-ty/tl*50-p.y;
+      if(bd<120&&p.cd<=0&&Math.random()<dt*2.5*p.skill){p.fx=(tgt.x-p.x)/bd;p.fy=(tgt.y-p.y)/bd;p.dashReq=true}}
+    const l=Math.hypot(ix,iy)||1;ix/=l;iy/=l;p.wob=(p.wob||0)+dt;
+    ix+=Math.sin(p.wob*3+p.id)*.25*(1-p.skill);iy+=Math.cos(p.wob*2+p.id)*.25*(1-p.skill);return[ix,iy]}
+  function control(dt){
+    for(const p of P){if(!p.alive||p.falling)continue;let ix=0,iy=0;
+      if(p.local){const v=localVec();ix=v[0];iy=v[1]}else if(p.remote){ix=p.inp.x;iy=p.inp.y}else{const v=bot(p,dt);ix=v[0];iy=v[1]}
+      const l=Math.hypot(ix,iy);if(l>1){ix/=l;iy/=l}
+      p.vx+=ix*ACC*dt;p.vy+=iy*ACC*dt;
+      if(l>0.15){p.fx+=(ix/l-p.fx)*Math.min(1,dt*14);p.fy+=(iy/l-p.fy)*Math.min(1,dt*14);const fl=Math.hypot(p.fx,p.fy)||1;p.fx/=fl;p.fy/=fl}
+      p.cd=Math.max(0,p.cd-dt);p.dashT=Math.max(0,p.dashT-dt);
+      if(p.dashReq){p.dashReq=false;if(p.cd<=0){p.vx+=p.fx*DASH;p.vy+=p.fy*DASH;p.cd=1.5;p.dashT=.28;beep(520,.05)}}}}
+  function physics(dt){
+    const dmp=Math.exp(-3.2*dt);
+    for(const p of P){if(!p.alive)continue;p.vx*=dmp;p.vy*=dmp;p.x+=p.vx*dt;p.y+=p.vy*dt;p.hitT=Math.max(0,p.hitT-dt)}
+    for(let i=0;i<P.length;i++)for(let j=i+1;j<P.length;j++){const a=P[i],b=P[j];if(!a.alive||!b.alive||a.falling||b.falling)continue;
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy);if(d>=PR*2||d===0)continue;
+      const nx=dx/d,ny=dy/d,ov=(PR*2-d)/2;a.x-=nx*ov;a.y-=ny*ov;b.x+=nx*ov;b.y+=ny*ov;
+      const rv=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny;
+      if(rv>0){const imp=rv*.95+40;a.vx-=nx*imp;a.vy-=ny*imp;b.vx+=nx*imp;b.vy+=ny*imp;if(rv>250)beep(210,.05)}
+      if(a.dashT>0){b.vx+=nx*KICK;b.vy+=ny*KICK;a.vx-=nx*KICK*.3;a.vy-=ny*KICK*.3}
+      if(b.dashT>0){a.vx-=nx*KICK;a.vy-=ny*KICK;b.vx+=nx*KICK*.3;b.vy+=ny*KICK*.3}
+      a.hit=b.id;a.hitT=2.5;b.hit=a.id;b.hitT=2.5}
+    for(const p of P){if(!p.alive)continue;
+      if(!p.falling){if(Math.hypot(p.x-CX,p.y-CY)>Rcur+PR*.4){p.falling=true;p.fall=0;if(p.hit!=null&&p.hitT>0&&P[p.hit]&&P[p.hit].alive&&!P[p.hit].falling)P[p.hit].kos++;beep(160,.25)}}
+      else{p.fall+=dt/.7;if(p.fall>=1)p.alive=false}}}
+  function update(dt){
+    if(state==='cd'){tcount-=dt;if(tcount<=0){state='play';t=0;goT=.7}return}
+    if(state==='end'){physics(dt);endT-=dt;if(endT<=0)afterRound();return}
+    if(state!=='play')return;
+    t+=dt;goT=Math.max(0,goT-dt);Rcur=Math.max(110,R0-Math.max(0,t-4)*17);
+    control(dt);physics(dt);
+    const live=P.filter(p=>p.alive&&!p.falling);
+    if(live.length<=1){state='end';endT=2.4;winner=live.length?live[0].id:-1;if(winner>=0)P[winner].wins++;hudKey='';renderHud();beep(winner>=0?700:200,.2)}}
+  function afterRound(){const m=P.find(p=>p.wins>=cfg.win);if(!m){newRound();return}state='over';winner=m.id;hudKey='';renderHud();overUI()}
+  function overUI(){if(shown||!P[winner])return;shown=true;const msg=$('#rn-msg');
+    if(msg)msg.innerHTML=`🏆 ${esc(P[winner].name)} wins the match!${host?' <button class="btn p" data-rn="again">Play again</button>':' Waiting for the host…'}`;
+    if(!counted){counted=true;const mm=S.mp||(S.mp={w:0,l:0,d:0});if(winner===you)mm.w++;else mm.l++;save()}}
+  function snap(){const m={t:'s',st:state,tc:+tcount.toFixed(2),R:Math.round(Rcur),go:+goT.toFixed(2),w:winner,rd:round,wi:P.map(p=>p.wins),
+      p:P.map(p=>[Math.round(p.x),Math.round(p.y),+p.fx.toFixed(2),+p.fy.toFixed(2),+p.cd.toFixed(2),p.alive?1:0,p.falling?1:0,+p.fall.toFixed(2)])};
+    P.forEach(p=>{if(p.remote&&p.on!==false)send(p.link,m)})}
+
+  /* ----- guest: messages ----- */
+  function onSnap(m){
+    if(!Array.isArray(m.p)||m.p.length!==P.length||P[0].col===undefined){if(performance.now()-hiAt>1000){hiAt=performance.now();send(o.link,{t:'hi'})}return}
+    state=m.st;tcount=+m.tc||0;Rcur=+m.R||R0;goT=+m.go||0;winner=Number.isInteger(m.w)?m.w:-1;round=m.rd|0;
+    m.p.forEach((a,i)=>{const p=P[i];if(!p||!Array.isArray(a))return;p.tx=a[0];p.ty=a[1];p.fx=a[2];p.fy=a[3];p.cd=a[4];p.alive=!!a[5];p.falling=!!a[6];p.fall=a[7]});
+    if(Array.isArray(m.wi))m.wi.forEach((w,i)=>{if(P[i])P[i].wins=w|0});
+    renderHud();
+    if(state==='over')overUI();else if(shown){shown=false;counted=false;const msg=$('#rn-msg');if(msg)msg.innerHTML=''}}
+  function onMsg(m){if(!alive||!m||typeof m!=='object')return;
+    if(m.t==='lobby'||m.t==='start'){const ps=Array.isArray(m.ps)?m.ps.slice(0,8):[];
+      P=ps.map((q,i)=>({id:i,name:cleanP({name:q&&q.n}).name,av:cleanP({av:q&&q.a}).av,human:m.t==='start'?!!(q&&q.h):true,on:!(q&&q.on===false),col:m.t==='start'?COLORS[i]:undefined,wins:0,alive:true,falling:false,fall:0,cd:0,fx:0,fy:-1}));
+      you=Number.isInteger(m.you)?m.you:0;cfg.win=+m.win||3;
+      if(m.t==='start'){state='cd';shown=false;counted=false;showGame();const msg=$('#rn-msg');if(msg)msg.innerHTML=''}else{state='lobby';renderLobby()}}
+    else if(m.t==='s')onSnap(m);
+    else if(m.t==='full'){alive=false;cancelAnimationFrame(raf);main.innerHTML=dShell('Ring Out','<p class="msg">This room is full or the match has already started.</p>')}}
+
+  /* ----- drawing ----- */
+  function draw(){
+    const s=sc;cx.clearRect(0,0,W,W);
+    const g=cx.createLinearGradient(0,0,0,W);g.addColorStop(0,'#0b1030');g.addColorStop(1,'#1a0f3a');cx.fillStyle=g;cx.fillRect(0,0,W,W);
+    cx.beginPath();cx.arc(CX*s,CY*s,R0*s,0,7);cx.strokeStyle='rgba(255,255,255,.08)';cx.lineWidth=2;cx.stroke();
+    const rg=cx.createRadialGradient(CX*s,CY*s,10,CX*s,CY*s,Math.max(10,Rcur*s));rg.addColorStop(0,'#3b3585');rg.addColorStop(1,'#241f66');
+    cx.beginPath();cx.arc(CX*s,CY*s,Rcur*s,0,7);cx.fillStyle=rg;cx.fill();cx.lineWidth=5;cx.strokeStyle=(state==='play'&&Rcur<R0)?'#f43f8e':'#22d3ee';cx.stroke();
+    for(const p of P){if(!p.alive||p.x===undefined)continue;
+      const sf=p.falling?Math.max(.2,1-p.fall*.8):1,r=PR*s*sf;cx.globalAlpha=p.falling?Math.max(0,1-p.fall):1;const px=p.x*s,py=p.y*s,col=p.col||'#888';
+      cx.beginPath();cx.arc(px,py+r*.25,r,0,7);cx.fillStyle='rgba(0,0,0,.3)';cx.fill();
+      cx.beginPath();cx.arc(px,py,r,0,7);cx.fillStyle=col;cx.fill();cx.lineWidth=p.id===you?3.5:p.human?2:1.5;cx.strokeStyle=p.id===you?'#fff':p.human?'rgba(255,255,255,.55)':'rgba(0,0,0,.45)';cx.stroke();
+      const ex=p.fx||0,ey=p.fy||0,qx=-ey,qy=ex;
+      for(const sd of[-1,1]){const ox=px+ex*r*.35+qx*sd*r*.35,oy=py+ey*r*.35+qy*sd*r*.35;cx.beginPath();cx.arc(ox,oy,r*.27,0,7);cx.fillStyle='#fff';cx.fill();cx.beginPath();cx.arc(ox+ex*r*.09,oy+ey*r*.09,r*.12,0,7);cx.fillStyle='#111';cx.fill()}
+      if(!p.falling){cx.beginPath();if(p.cd>0)cx.arc(px,py,r+5*s,-Math.PI/2,-Math.PI/2+Math.PI*2*(1-p.cd/1.5));else cx.arc(px,py,r+5*s,0,7);cx.strokeStyle=p.cd>0?'rgba(255,255,255,.7)':'rgba(163,230,53,.7)';cx.lineWidth=2.5;cx.stroke();
+        cx.fillStyle='#fff';cx.font='bold '+Math.max(9,22*s)+'px system-ui';cx.textAlign='center';cx.fillText(p.human?String(p.name).slice(0,8):'BOT',px,py-r-8*s)}
+      cx.globalAlpha=1}
+    cx.textAlign='center';cx.fillStyle='#fff';cx.shadowColor='rgba(0,0,0,.6)';cx.shadowBlur=8;
+    if(dead){cx.font='bold '+60*s+'px system-ui';cx.fillText('Connection lost',W/2,W/2)}
+    else if(state==='cd'){cx.font='bold '+150*s+'px system-ui';cx.fillText(String(Math.max(1,Math.ceil(tcount))),W/2,W/2+50*s)}
+    else if(state==='play'&&goT>0){cx.font='bold '+110*s+'px system-ui';cx.fillText('GO!',W/2,W/2+40*s)}
+    else if(state==='end'&&P[winner]!==undefined||state==='end'){cx.font='bold '+55*s+'px system-ui';cx.fillText(winner>=0&&P[winner]?String(P[winner].name).slice(0,10)+' wins the round!':'Draw!',W/2,W/2)}
+    cx.shadowBlur=0}
+  function frame(ts){raf=requestAnimationFrame(frame);const dt=Math.min(.033,(ts-last)/1000||0);last=ts;
+    if(state==='lobby'||!cx)return;
+    if(host){update(dt);if(ts-lastSend>=50){lastSend=ts;snap()}}
+    else{const k=Math.min(1,dt*18);for(const p of P){if(p.tx===undefined)continue;
+      if(p.x===undefined){p.x=p.tx;p.y=p.ty}else{const dx=p.tx-p.x,dy=p.ty-p.y;if(dx*dx+dy*dy>40000){p.x=p.tx;p.y=p.ty}else{p.x+=dx*k;p.y+=dy*k}}}
+      sendIn()}
+    draw()}
+
+  /* ----- input & wiring ----- */
+  const norm=e=>e.key.length===1?e.key.toLowerCase():e.key;
+  const kd=e=>{if(!alive||state==='lobby')return;if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT')return;const k=norm(e);
+    if(['w','a','s','d','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(k)){down[k]=true;e.preventDefault()}
+    else if(k===' '||k==='Enter'){e.preventDefault();if(!e.repeat)dashNow()}};
+  const ku=e=>{delete down[norm(e)]};
+  document.addEventListener('keydown',kd);document.addEventListener('keyup',ku);
+  const h=e=>{if(main.onclick!==h)return;const x=e.target.closest('[data-mp],[data-rn]');if(!x)return;
+    if(x.dataset.mp==='lobby')return go('multiplayer');
+    const a=x.dataset.rn;if(a==='copy')return copyText(code);if(!alive)return;
+    if(a==='start'&&host)startMatch();else if(a==='again'&&host)startMatch();else if(a==='add'&&host&&o.manualAdd)o.manualAdd(addLink)};
+  main.onclick=h;main.oninput=main.onkeydown=null;
+  main.onchange=e=>{if(e.target.id==='rn-b2')cfg.bots=+e.target.value;if(e.target.id==='rn-w'){cfg.win=+e.target.value;if(host)sendLobby()}};
+  cleanup=()=>{if(!alive)return;alive=false;cancelAnimationFrame(raf);clearInterval(lt);main.onclick=main.onchange=null;
+    document.removeEventListener('keydown',kd);document.removeEventListener('keyup',ku);rtCloseAdd();
+    if(host){if(o.sig)o.sig.stop();P.forEach(p=>{if(p.remote){try{p.link.close()}catch(e){}}})}else{try{o.link.close()}catch(e){}}
+    try{o.pc&&o.pc.close()}catch(e){}};
+  renderLobby();window.scrollTo(0,0);
+  if(host){o.addLink=addLink;lt=setInterval(()=>{if(state==='lobby')sendLobby()},2000)}
+  else{o.link.on('data',onMsg);o.link.on('close',()=>{if(alive){dead=true;const msg=$('#rn-msg');if(msg)msg.textContent='Connection lost.';if(state==='lobby'){const b=$('#rn-lobby');if(b)b.innerHTML='<div class="card pad empty"><h3>Connection lost</h3><p>Go back and join again.</p></div>'}}});send(o.link,{t:'hi'})}
+  raf=requestAnimationFrame(frame)}
+
+async function mpGroupCreate(gk,say){
+  if(gk==='ringout')return rtCreate(say);
+  say('Creating room…');
+  if(!window.__peerBad){
+    if(await loadPeer()){const c0=mkCode(),r=await peerOpen(c0);if(r.ok)return mpGroupHost(gk,r.peer,c0);window.__peerBad=true}else window.__peerBad=true}
+  let code=null;
+  for(let i=0;i<4;i++){const c=mkCode(),ex=await sget('grp:'+c);if(!ex||ex.closed||Date.now()-ex.t>300000){code=c;break}}
+  if(code&&await sset('grp:'+code,{g:gk,host:{name:pname(),av:S.avatar},views:{},v:0,t:Date.now()})){
+    const peer=storeHostPeer(gk,code);mpGroupHost(gk,peer,code);peer.start();return}
+  toast('Shared storage is not available either — using manual codes for this group.');
+  return mpGroupHostManual(gk)}
+
+async function mpStoreJoin(code,say,r0){
+  const r=r0||await sget('grp:'+code);
+  if(r&&r.g==='ringout')return rtJoin(code,say,r);
+  if(!r||r.closed||!GM[r.g]||Date.now()-r.t>300000)return false;
+  const conn=storeGuestConn(code);say('Joining…');
+  if(!(await conn.join()))return false;
+  mpGroupGuest(r.g,conn,{destroy(){conn.close()}},{n:cleanP({name:r.host&&r.host.name}).name,a:cleanP({av:r.host&&r.host.av}).av});
+  conn.start();return true}
+
+async function mpGroupJoinFrom(inv,st){
+  let pc;try{pc=new RTCPeerConnection(RTC_CFG)}catch(e){return st('Could not start a direct connection here.')}
+  const base=cleanup;cleanup=()=>{try{pc.close()}catch(e){}if(base)base()};
+  st('Creating reply code…');
+  try{
+    pc.ondatachannel=ev=>{const dc=ev.channel;
+      if(inv.g==='ringout'){const begin=()=>{ringNet({host:false,code:'',link:rtcConn(dc),pc,hostInfo:{name:cleanP({name:inv.n}).name,av:cleanP({av:inv.a}).av}})};if(dc.readyState==='open')begin();else dc.onopen=begin;return}
+      const begin=()=>{const conn=rtcConn(dc);let got=false;
+        conn.on('data',d=>{if(got||!d||d.t!=='hello'||!GM[d.g])return;got=true;conn.send({t:'hello',n:pname(),a:S.avatar});mpGroupGuest(d.g,conn,{destroy(){try{pc.close()}catch(e){}}},d)})};
+      if(dc.readyState==='open')begin();else dc.onopen=begin};
+    pc.onconnectionstatechange=()=>{if(pc.connectionState==='failed')st('Could not connect — try both devices on the same Wi-Fi.')};
+    await pc.setRemoteDescription({type:'offer',sdp:inv.s});await pc.setLocalDescription(await pc.createAnswer());await iceDone(pc);
+    const code=b64e({n:pname(),a:S.avatar,s:pc.localDescription.sdp});
+    const box=$('#dstep2');if(box)box.innerHTML=`<div class="card pad"><b>Step 2</b> — send this reply code back to the host, then keep this page open:<textarea id="dout" readonly onfocus="this.select()" style="${TA}">${code}</textarea><div class="row"><button class="btn p" data-mp="copy">Copy reply code</button></div></div>`;
+    st('Waiting for the host to connect…')}
+  catch(er){st('Could not create a reply — is the invite code complete?')}}
+
 /* ---------- registry (add new games here) ---------- */
 const GAMES=[
  {id:'ttt',title:'Tic-Tac-Toe',cat:'Board',mode:'Solo vs AI',added:5,quick:1,glyph:'✕ ○',grad:'linear-gradient(135deg,#7c3aed,#22d3ee)',goal:'Win a round against the AI',how:'Get three in a row. You are X. On Hard the AI never loses, so a draw is a great result.',mount:ttt},
@@ -1580,7 +2004,8 @@ const GAMES=[
  {id:'chess',title:'Chess',cat:'Board',mode:'Solo vs AI',added:16,quick:0,glyph:'♚',grad:'linear-gradient(135deg,#1e293b,#8b5cf6)',goal:'Win a game',how:'Full chess rules: castling, en passant, check, checkmate and stalemate. You play white — tap a piece, then a highlighted square (pawns auto-promote to a queen). Undo reverts your last move. Also playable with a friend in Multiplayer.',mount:chessGame},
  {id:'checkers',title:'Checkers',cat:'Board',mode:'Solo vs AI',added:15,quick:0,glyph:'●○',grad:'linear-gradient(135deg,#f43f8e,#65a30d)',goal:'Beat the computer',how:'Move diagonally on the dark squares. Captures are mandatory and multi-jumps continue with the same piece. Reach the far row to become a king. You play pink. Also playable with a friend in Multiplayer.',mount:checkersGame},
  {id:'sudoku',title:'Sudoku',cat:'Puzzle',mode:'Solo',added:14,quick:0,glyph:'9',grad:'linear-gradient(135deg,#0ea5e9,#8b5cf6)',goal:'Solve a puzzle',how:'Fill every row, column and 3×3 box with 1–9 without repeats. Every puzzle has exactly one solution. Conflicts turn red, and you can use Check or Hints (−100 points each). Keyboard digits and arrows work too.',mount:sudoku},
- {id:'battle',title:'Battleship',cat:'Board',mode:'Solo vs AI',added:13,quick:0,glyph:'🚢',grad:'linear-gradient(135deg,#0c4a6e,#22d3ee)',goal:'Sink the enemy fleet',how:'Your five ships are placed at random (shuffle until you like it). Take turns firing at the 10×10 grid — the computer hunts smartly once it scores a hit. Sink all five enemy ships first to win. Fewer shots means a higher score.',mount:battle}];
+ {id:'battle',title:'Battleship',cat:'Board',mode:'Solo vs AI',added:13,quick:0,glyph:'🚢',grad:'linear-gradient(135deg,#0c4a6e,#22d3ee)',goal:'Sink the enemy fleet',how:'Your five ships are placed at random (shuffle until you like it). Take turns firing at the 10×10 grid — the computer hunts smartly once it scores a hit. Sink all five enemy ships first to win. Fewer shots means a higher score.',mount:battle},
+ {id:'ringout',title:'Ring Out',cat:'Arcade',mode:'Solo vs AI',added:17,quick:0,glyph:'🥊',grad:'linear-gradient(135deg,#f43f8e,#8b5cf6,#22d3ee)',goal:'Win a match',how:'A couch-style party brawler: shove rivals off a platform that keeps shrinking — last fighter standing wins the round. Play alone against bots, or with up to 3 friends on one keyboard (P1: WASD + Space, P2: arrows + Enter, P3: IJKL + U). On a phone, use the joystick and the DASH button.',mount:ringout}];
 const PLANNED=['Quiz Battle','Trivia Challenge','Word Guessing Game'];
 const byId=id=>GAMES.find(g=>g.id===id);
 const dailyGame=()=>GAMES[[...today()].reduce((a,c)=>a+c.charCodeAt(0),0)%GAMES.length];
