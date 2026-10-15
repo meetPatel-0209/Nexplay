@@ -467,7 +467,7 @@ const pname=()=>S.name||(S.name='Player'+(100+Math.random()*900|0));
 async function sget(k){try{const r=await window.storage.get(k,true);return r&&r.value?JSON.parse(r.value):null}catch(e){return null}}
 async function sset(k,v){try{return !!(await window.storage.set(k,JSON.stringify(v),true))}catch(e){return false}}
 const CHARS='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-const mkCode=()=>Array.from({length:6},()=>CHARS[Math.random()*CHARS.length|0]).join('');
+const mkCode=()=>Array.from({length:6},()=>Math.random()*10|0).join('');
 
 const T_L=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
 const C4H={drop(b,c){for(let r=5;r>=0;r--)if(!b[r*7+c])return r;return -1},
@@ -909,6 +909,7 @@ const dShell=(t,b)=>`<div class="gh"><button class="btn" data-mp="lobby">← Bac
 async function copyText(t){try{await navigator.clipboard.writeText(t);toast('Copied!')}catch(e){const ta=$('#dout');if(ta){ta.focus();ta.select();try{document.execCommand('copy');toast('Copied!')}catch(er){toast('Select the code and copy it manually.')}}}}
 
 async function mpDirectHost(gk){
+  if(GM[gk])return mpGroupHostManual(gk);
   const G=MP[gk];if(!G)return;
   if(!window.RTCPeerConnection)return toast('Direct connection isn\'t supported in this browser.');
   let pc,dc,alive=true,peer=null;
@@ -940,7 +941,7 @@ function mpDirectJoin(){
   const h=async e=>{if(main.onclick!==h)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
     if(a==='lobby')return go('multiplayer');
     if(a==='copy')return copyText($('#dout').value);
-    if(a==='mk'){let inv;try{inv=b64d($('#din').value);if(!MP[inv.g]||typeof inv.s!=='string'||inv.s.length>20000)throw 0}catch(er){return st('That invite code isn\'t valid. Paste the whole code.')}
+    if(a==='mk'){let inv;try{inv=b64d($('#din').value);if(inv&&GM[inv.g]&&inv.grp&&typeof inv.s==='string'&&inv.s.length<=20000)return mpGroupJoinFrom(inv,st);if(!MP[inv.g]||typeof inv.s!=='string'||inv.s.length>20000)throw 0}catch(er){return st('That invite code isn\'t valid. Paste the whole code.')}
       try{if(pc)pc.close()}catch(er){}
       st('Creating reply code…');
       try{pc=new RTCPeerConnection(RTC_CFG);const host={name:cleanP({name:inv.n}).name,av:cleanP({av:inv.a}).av};
@@ -1114,6 +1115,454 @@ function mpLobby(){
   main.onkeydown=e=>{if(e.key==='Enter'&&e.target.id==='mpc')h({target:$('[data-mp=join]')})};
   cleanup=()=>{main.onclick=main.oninput=main.onkeydown=null}}
 
+/* ---------- group games (2–8 players) ---------- */
+document.head.appendChild(Object.assign(document.createElement('style'),{textContent:`.bomb{display:inline-block;animation:bmb .7s ease-in-out infinite alternate}@keyframes bmb{to{transform:scale(1.15) rotate(6deg)}}`}));
+const GM={};
+const onIds=P=>P.map((p,i)=>p.on?i:-1).filter(i=>i>=0);
+const grpRank=(v,P)=>P.map((p,i)=>({p,i,s:(v.sc&&v.sc[i])||0})).sort((a,b)=>b.s-a.s);
+const grpBoard=(v,P,me)=>`<div class="card pad" style="margin-top:10px"><b>Scores</b>${grpRank(v,P).map((r,k)=>`<div class="ctl" style="margin-top:6px"><span>${k+1}. ${r.p.av} ${esc(r.p.name)}${r.i===me?' (you)':''}${r.p.on?'':' · left'}</span><b>${r.s}${v.gain&&v.gain[r.i]?` <span class="muted">+${v.gain[r.i]}</span>`:''}</b></div>`).join('')}</div>`;
+const gmCard=(k,label,attr)=>{const g=GM[k];return`<article class="card gc"><div class="cover" style="background:${g.grad}"><span>${g.glyph}</span></div><div class="cb"><h3>${g.name}</h3><p class="meta">${g.min}–${g.max} players · ${g.meta}</p><div class="row"><button class="btn p" ${attr} style="flex:1">${label}</button></div></div></article>`};
+function keepInputs(fn){const vals={};document.querySelectorAll('#main input[id]').forEach(i=>{vals[i.id]=i.value});const ae=document.activeElement&&document.activeElement.id;fn();
+  for(const k in vals){const e=document.getElementById(k);if(e)e.value=vals[k]}if(ae){const e=document.getElementById(ae);if(e&&e.focus)e.focus()}}
+const INP='border-radius:12px;border:1px solid var(--bd);background:var(--card);color:var(--t);padding:0 12px;height:50px;font-size:20px;text-align:center';
+
+/* --- Quiz Blitz --- */
+const QB=[["Which planet is known as the Red Planet?",["Venus","Mars","Jupiter","Mercury"],1],["How many continents are there?",["5","6","7","8"],2],["Which is the largest ocean?",["Atlantic","Indian","Arctic","Pacific"],3],["What is the chemical formula of water?",["H2O","CO2","O2","NaCl"],0],["How many sides does a hexagon have?",["5","6","7","8"],1],["Who wrote Romeo and Juliet?",["Dickens","Shakespeare","Austen","Twain"],1],["What is the capital of Japan?",["Kyoto","Osaka","Tokyo","Seoul"],2],["Which is the fastest land animal?",["Lion","Cheetah","Horse","Leopard"],1],["Which gas do plants absorb from the air?",["Oxygen","Nitrogen","Carbon dioxide","Helium"],2],["How many players are on the field for one cricket team?",["9","10","11","12"],2],["What is the capital of Australia?",["Sydney","Melbourne","Canberra","Perth"],2],["What is 12 × 12?",["124","144","132","148"],1],["Which is the hardest natural substance?",["Gold","Iron","Diamond","Quartz"],2],["Which organ pumps blood around the body?",["Liver","Lungs","Heart","Kidney"],2],["What is the national animal of India?",["Lion","Tiger","Elephant","Peacock"],1],["Which festival is known as the festival of lights?",["Holi","Diwali","Eid","Navratri"],1],["How many days are in a leap year?",["364","365","366","367"],2],["What is the smallest prime number?",["0","1","2","3"],2],["Which is the largest planet in our solar system?",["Saturn","Jupiter","Neptune","Earth"],1],["What is the currency of Japan?",["Yuan","Won","Yen","Dollar"],2],["Who painted the Mona Lisa?",["Van Gogh","Picasso","Da Vinci","Monet"],2],["Which gas do humans need to breathe to live?",["Nitrogen","Oxygen","Hydrogen","Carbon dioxide"],1],["At sea level, water boils at what temperature (°C)?",["90","100","110","120"],1],["What is the capital of India?",["Mumbai","Kolkata","New Delhi","Chennai"],2],["How many minutes are in 2 hours?",["100","110","120","130"],2]];
+const QT=12000,QN=8;
+const qReveal=(s,now)=>{const q=QB[s.order[s.qi]];s.gain=s.sc.map(()=>0);for(const k in s.ans){const a=s.ans[k];if(a.c===q[2]){const g=100+Math.round(a.ms/QT*100);s.gain[k]=g;s.sc[k]+=g}}s.ph='r';s.until=now+4500};
+GM.quiz={name:'Quiz Blitz',glyph:'⚡❓',meta:'Fast trivia battle',grad:'linear-gradient(135deg,#f59e0b,#ef4444)',min:2,max:8,
+  how:'Everyone answers the same question at the same time. Correct answers earn 100 points plus a speed bonus. 8 questions — highest score wins.',
+  init(P,now){return{ph:'q',qi:0,order:shuffle([...QB.keys()]).slice(0,QN),until:now+QT,ans:{},sc:P.map(()=>0),gain:P.map(()=>0)}},
+  pub(s,i,now){const q=QB[s.order[Math.min(s.qi,QN-1)]],r=s.ph!=='q';return{ph:s.ph,qi:s.qi,n:QN,q:q[0],o:q[1],ms:Math.max(0,s.until-now),mine:s.ans[i]?s.ans[i].c:null,got:Object.keys(s.ans).length,sc:s.sc,...(r?{a:q[2],gain:s.gain}:{})}},
+  act(s,i,a,now,P){if(s.ph!=='q'||!a||a.t!=='ans'||!Number.isInteger(a.c)||a.c<0||a.c>3||s.ans[i]||!P[i]||!P[i].on)return null;s.ans[i]={c:a.c,ms:Math.max(0,s.until-now)};if(onIds(P).every(k=>s.ans[k]))qReveal(s,now);return s},
+  tick(s,now,P){if(s.ph==='q'){if(now>=s.until||onIds(P).every(k=>s.ans[k])){qReveal(s,now);return s}}
+    else if(s.ph==='r'&&now>=s.until){if(s.qi+1>=QN)s.ph='end';else{s.qi++;s.ph='q';s.ans={};s.until=now+QT}return s}return null},
+  view(v,me,P){const L=['A','B','C','D'];
+    if(v.ph==='end'){const r=grpRank(v,P)[0];return`<div class="card pad empty"><div style="font-size:54px">🏆</div><h2>${esc(r.p.name)} wins!</h2></div>`+grpBoard(v,P,me)}
+    const rev=v.ph==='r',on=P.filter(p=>p.on).length;
+    return`<div class="ctl"><span class="score">Question ${v.qi+1}/${v.n}</span><span>⏱ <b id="cd">${Math.ceil(v.ms/1000)}</b>s</span></div>
+    <div class="card pad"><h3 style="margin-bottom:12px">${esc(v.q)}</h3><div style="display:grid;gap:8px">${v.o.map((o,k)=>{const picked=v.mine===k,right=rev&&v.a===k;
+      return`<button class="btn" data-ga='${JSON.stringify({t:'ans',c:k})}' ${v.mine!=null||rev?'disabled':''} style="justify-content:flex-start;text-align:left;min-height:50px;${right?'background:rgba(163,230,53,.3);border-color:var(--l);':picked?'background:rgba(139,92,246,.35);':''}">${L[k]}. ${esc(o)}${picked?' ✔':''}</button>`}).join('')}</div>
+    <p class="msg">${rev?(v.mine===v.a?'Correct! 🎉':v.mine==null?'Time is up.':'Not this time.'):v.mine!=null?'Locked in — waiting ('+v.got+'/'+on+')':'Pick your answer!'}</p></div>`+grpBoard(v,P,me)}};
+
+/* --- Outsmart the Crowd (guess 2/3 of the average) --- */
+const avReveal=(s,now)=>{const ids=Object.keys(s.picks);let last={picks:{...s.picks},target:null,avg:null,win:[]};
+  if(ids.length){const avg=ids.reduce((t,k)=>t+s.picks[k],0)/ids.length,tg=avg*2/3;let best=1e9;ids.forEach(k=>{best=Math.min(best,Math.abs(s.picks[k]-tg))});
+    const w=ids.filter(k=>Math.abs(s.picks[k]-tg)-best<1e-9).map(Number);w.forEach(k=>{s.sc[k]++});last={picks:{...s.picks},target:Math.round(tg*100)/100,avg:Math.round(avg*100)/100,win:w}}
+  s.last=last;s.ph='r';s.until=now+6500};
+GM.avg={name:'Outsmart the Crowd',glyph:'⅔',meta:'Guess 2/3 of the average',grad:'linear-gradient(135deg,#6366f1,#22d3ee)',min:3,max:8,
+  how:"Secretly pick a number from 0 to 100. The number closest to two-thirds of everyone's average wins the point. Think about what the others will pick! 5 rounds.",
+  init(P,now){return{ph:'in',rd:0,until:now+25000,picks:{},sc:P.map(()=>0),last:null}},
+  pub(s,i,now){return{ph:s.ph,rd:s.rd,n:5,ms:Math.max(0,s.until-now),mine:s.picks[i]!=null?s.picks[i]:null,sub:Object.keys(s.picks).length,sc:s.sc,last:s.ph==='in'?null:s.last}},
+  act(s,i,a,now,P){if(s.ph!=='in'||!a||a.t!=='pick'||!P[i]||!P[i].on||s.picks[i]!=null||String(a.v==null?'':a.v).trim()==='')return null;const x=Math.round(Number(a.v));if(!Number.isFinite(x)||x<0||x>100)return null;
+    s.picks[i]=x;if(onIds(P).every(k=>s.picks[k]!=null))avReveal(s,now);return s},
+  tick(s,now,P){if(s.ph==='in'){if(now>=s.until||onIds(P).every(k=>s.picks[k]!=null)){avReveal(s,now);return s}}
+    else if(s.ph==='r'&&now>=s.until){if(s.rd+1>=5)s.ph='end';else{s.rd++;s.ph='in';s.picks={};s.until=now+25000}return s}return null},
+  view(v,me,P){const on=P.filter(p=>p.on).length;
+    if(v.ph==='end'){const r=grpRank(v,P)[0];return`<div class="card pad empty"><div style="font-size:54px">🏆</div><h2>${esc(r.p.name)} wins!</h2></div>`+grpBoard(v,P,me)}
+    if(v.ph==='r'){const l=v.last;return`<div class="ctl"><span class="score">Round ${v.rd+1}/${v.n}</span><span>⏱ <b id="cd">${Math.ceil(v.ms/1000)}</b>s</span></div>
+      <div class="card pad"><h3>Results</h3>${l.target==null?'<p class="muted">Nobody picked a number.</p>':`<p>Average <b>${l.avg}</b> → target (⅔) <b>${l.target}</b></p>`}
+      <div style="display:grid;gap:6px;margin-top:8px">${Object.keys(l.picks).map(k=>`<div class="ctl"><span>${P[k]?P[k].av+' '+esc(P[k].name):''}</span><b>${l.picks[k]}${l.win.includes(+k)?' 🏆':''}</b></div>`).join('')}</div></div>`+grpBoard(v,P,me)}
+    return`<div class="ctl"><span class="score">Round ${v.rd+1}/${v.n}</span><span>⏱ <b id="cd">${Math.ceil(v.ms/1000)}</b>s</span></div>
+    <div class="card pad empty"><h3>Pick a number from 0 to 100</h3><p class="muted">Closest to ⅔ of the group's average wins the point.</p>
+    ${v.mine!=null?`<p class="msg">You picked ${v.mine}. Waiting for others (${v.sub}/${on})…</p>`:`<div class="row" style="justify-content:center"><input id="gn" type="number" inputmode="numeric" min="0" max="100" placeholder="0–100" style="${INP};width:140px"><button class="btn p" data-ga='{"t":"pick"}' data-gi="gn">Lock in</button></div>`}</div>`+grpBoard(v,P,me)}};
+
+/* --- Pass the Bomb (real-time) --- */
+const bmLive=(s,P)=>s.alive.map((a,i)=>a&&P[i]&&P[i].on?i:-1).filter(i=>i>=0);
+const bmNew=(s,P,now)=>{const L=bmLive(s,P);s.holder=L[Math.random()*L.length|0];s.fuse=now+9000+Math.random()*16000;s.lastPass=now;s.ph='play'};
+GM.bomb={name:'Pass the Bomb',glyph:'💣',meta:'Real-time hot potato',grad:'linear-gradient(135deg,#111827,#ef4444)',min:3,max:8,
+  how:'One player holds a bomb with a hidden fuse. Tap another player to pass it on before it explodes! Whoever holds it when it blows up is out. Last player standing wins.',
+  init(P,now){const s={ph:'play',alive:P.map(()=>true),holder:0,fuse:0,lastPass:0,boomAt:0,out:null};bmNew(s,P,now);return s},
+  pub(s){return{ph:s.ph,holder:s.holder,alive:s.alive,out:s.out}},
+  act(s,i,a,now,P){if(s.ph!=='play'||!a||a.t!=='pass'||i!==s.holder||!Number.isInteger(a.to)||a.to===i||!s.alive[a.to]||!P[a.to]||!P[a.to].on||now-s.lastPass<300)return null;s.holder=a.to;s.lastPass=now;return s},
+  tick(s,now,P){const L=bmLive(s,P);
+    if(s.ph==='play'){if(L.length<=1){s.ph='end';return s}
+      if(!L.includes(s.holder)){s.holder=L[Math.random()*L.length|0];s.lastPass=now;return s}
+      if(now>=s.fuse){s.alive[s.holder]=false;s.out=s.holder;s.ph='boom';s.boomAt=now+2600;return s}}
+    else if(s.ph==='boom'&&now>=s.boomAt){if(bmLive(s,P).length<=1)s.ph='end';else bmNew(s,P,now);return s}
+    return null},
+  view(v,me,P){const L=v.alive.map((a,i)=>a&&P[i]&&P[i].on?i:-1).filter(i=>i>=0);
+    if(v.ph==='end'){const w=L[0];return`<div class="card pad empty"><div style="font-size:60px">🏆</div><h2>${w!=null?esc(P[w].name)+' survives!':'Game over'}</h2></div>`}
+    const mine=v.holder===me&&v.ph==='play',boom=v.ph==='boom';
+    return`<div class="card pad empty"><div class="${boom?'':'bomb'}" style="font-size:64px">${boom?'💥':'💣'}</div><h3>${boom?esc(P[v.out].name)+' exploded!':mine?'You have the bomb — pass it!':esc(P[v.holder].name)+' has the bomb'}</h3></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:10px">${P.map((p,i)=>{const al=v.alive[i]&&p.on,can=mine&&al&&i!==me;
+      return`<button class="btn ${v.holder===i&&!boom?'p':''}" ${can?`data-ga='${JSON.stringify({t:'pass',to:i})}'`:'disabled'} style="min-height:56px;${al?'':'opacity:.35;text-decoration:line-through'}">${p.av} ${esc(p.name)}${i===me?' (you)':''}${v.holder===i&&!boom?' 💣':''}</button>`}).join('')}</div>`}};
+
+/* --- Odd One Out (word clues + voting) --- */
+const OW=[['Tea','Coffee'],['Cat','Dog'],['Pizza','Burger'],['Cricket','Football'],['Train','Bus'],['Rain','Snow'],['Mango','Apple'],['Car','Bike'],['Moon','Sun'],['Milk','Juice'],['Beach','Mountain'],['Doctor','Teacher'],['Chai','Lassi'],['Lion','Tiger'],['Winter','Summer']];
+const odNew=(s,P,now)=>{const L=onIds(P);let k;do{k=Math.random()*OW.length|0}while(s.used.includes(k)&&s.used.length<OW.length);s.used.push(k);const sw=Math.random()<.5,pr=OW[k];
+  s.wm=sw?pr[1]:pr[0];s.wo=sw?pr[0]:pr[1];s.odd=L[Math.random()*L.length|0];s.clues={};s.votes={};s.ph='clue';s.until=now+45000;s.last=null};
+const odReveal=(s,now)=>{const t={};Object.values(s.votes).forEach(x=>{t[x]=(t[x]||0)+1});let mx=0;Object.values(t).forEach(c=>{mx=Math.max(mx,c)});
+  const top=Object.keys(t).filter(k=>t[k]===mx).map(Number),caught=mx>0&&top.length===1&&top[0]===s.odd;
+  if(caught)Object.keys(s.votes).forEach(k=>{if(s.votes[k]===s.odd)s.sc[k]++});else s.sc[s.odd]+=3;
+  s.last={caught};s.ph='rev';s.until=now+9000};
+GM.odd={name:'Odd One Out',glyph:'🕵️',meta:'Find who has the different word',grad:'linear-gradient(135deg,#7c3aed,#f43f8e)',min:3,max:8,
+  how:'Everyone gets a secret word — but one player gets a different, similar word and does not know it. Everyone types a one-word clue, then you vote for who you think is the odd one. Catch them to score; if they escape, they get 3 points. 3 rounds.',
+  init(P,now){const s={rd:0,sc:P.map(()=>0),used:[]};odNew(s,P,now);return s},
+  pub(s,i,now){const rev=s.ph==='rev'||s.ph==='end';return{ph:s.ph,rd:s.rd,n:3,ms:Math.max(0,s.until-now),w:i===s.odd?s.wo:s.wm,
+    clues:s.ph==='clue'?Object.fromEntries(Object.keys(s.clues).map(k=>[k,1])):s.clues,voted:s.votes[i]!=null?s.votes[i]:null,nv:Object.keys(s.votes).length,sc:s.sc,
+    ...(rev?{odd:s.odd,wm:s.wm,wo:s.wo,votes:s.votes,last:s.last}:{})}},
+  act(s,i,a,now,P){if(!a||!P[i]||!P[i].on)return null;
+    if(s.ph==='clue'&&a.t==='clue'){const c=String(a.v==null?'':a.v).trim().replace(/\s+/g,' ').slice(0,20);if(!c||s.clues[i]!=null)return null;s.clues[i]=c;
+      if(onIds(P).every(k=>s.clues[k]!=null)){s.ph='vote';s.until=now+30000}return s}
+    if(s.ph==='vote'&&a.t==='vote'){if(!Number.isInteger(a.to)||a.to===i||!P[a.to]||!P[a.to].on||s.votes[i]!=null)return null;s.votes[i]=a.to;if(onIds(P).every(k=>s.votes[k]!=null))odReveal(s,now);return s}
+    return null},
+  tick(s,now,P){
+    if(s.ph==='clue'&&(now>=s.until||onIds(P).every(k=>s.clues[k]!=null))){onIds(P).forEach(k=>{if(s.clues[k]==null)s.clues[k]='—'});s.ph='vote';s.until=now+30000;return s}
+    if(s.ph==='vote'&&(now>=s.until||onIds(P).every(k=>s.votes[k]!=null))){odReveal(s,now);return s}
+    if(s.ph==='rev'&&now>=s.until){if(s.rd+1>=3)s.ph='end';else{s.rd++;odNew(s,P,now)}return s}
+    return null},
+  view(v,me,P){const on=P.filter(p=>p.on).length,cd=`<div class="ctl"><span class="score">Round ${v.rd+1}/${v.n}</span><span>⏱ <b id="cd">${Math.ceil(v.ms/1000)}</b>s</span></div>`;
+    if(v.ph==='end'){const r=grpRank(v,P)[0];return`<div class="card pad empty"><div style="font-size:54px">🏆</div><h2>${esc(r.p.name)} wins!</h2></div>`+grpBoard(v,P,me)}
+    if(v.ph==='clue'){const done=v.clues&&v.clues[me]!=null,n=Object.keys(v.clues||{}).length;
+      return cd+`<div class="card pad empty"><span class="muted">Your secret word</span><div style="font-size:40px;font-weight:900;margin:6px 0">${esc(v.w)}</div>
+      <p class="muted">One player has a different word. Give a one-word clue — without saying your word!</p>
+      ${done?'<p class="msg">Clue sent ✓ — waiting for others…</p>':`<div class="row" style="justify-content:center"><input id="gw" maxlength="20" placeholder="One-word clue" autocomplete="off" style="${INP};width:min(100%,220px)"><button class="btn p" data-ga='{"t":"clue"}' data-gi="gw">Send</button></div>`}
+      <p class="muted">${n}/${on} submitted</p></div>`+grpBoard(v,P,me)}
+    if(v.ph==='vote')return cd+`<div class="card pad"><h3>Who has the different word?</h3><p class="muted">${v.nv}/${on} voted</p><div style="display:grid;gap:8px;margin-top:10px">${P.map((p,i)=>`<div class="ctl card pad" style="padding:10px"><span>${p.av} <b>${esc(p.name)}</b>: “${esc((v.clues&&v.clues[i])||'—')}”</span>${i!==me&&p.on&&v.voted==null?`<button class="btn p" data-ga='${JSON.stringify({t:'vote',to:i})}'>Vote</button>`:v.voted===i?'<span class="badge">your vote</span>':''}</div>`).join('')}</div></div>`+grpBoard(v,P,me);
+    return`<div class="card pad empty"><h3>${v.last&&v.last.caught?'🎯 The odd one was caught!':'😈 The odd one escaped!'}</h3><p>${P[v.odd].av} <b>${esc(P[v.odd].name)}</b> had <b>${esc(v.wo)}</b> — everyone else had <b>${esc(v.wm)}</b>.</p></div>`+grpBoard(v,P,me)}};
+
+/* ---------- group rooms (host + up to 7 guests over PeerJS) ---------- */
+function grpPage({G,v,me,P,started,code,isHost,dead}){
+  const pl=P.map((p,i)=>`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:22px">${p.av}</span><b>${esc(p.name)}</b><span class="muted">${i===0?'host':''}${i===me?' · you':''}</span><span style="width:9px;height:9px;border-radius:50%;display:inline-block;background:${p.on?'#22c55e':'#ef4444'}"></span></div>`).join('');
+  let body;
+  if(!started||!v){body=`<div class="card pad"><div class="ctl"><div><span class="muted">Room code</span><div style="font-size:34px;font-weight:900;letter-spacing:.2em">${esc(code||'······')}</div></div>${isHost?'<button class="btn" data-mp="gcopy">Copy code</button>':''}</div>
+    <p class="muted" style="margin:8px 0">${G.how}</p><b>Players (${P.length}/${G.max})</b><div style="display:grid;gap:8px;margin-top:8px">${pl}</div>
+    ${isHost?`<div class="row" style="padding-top:14px"><button class="btn p" data-mp="gstart" ${onIds(P).length<G.min?'disabled':''}>Start game</button><span class="muted">Needs ${G.min}+ players</span></div>`:'<p class="msg">Waiting for the host to start…</p>'}</div>`}
+  else{try{body=G.view(v,me,P)}catch(e){body='<div class="card pad empty">Could not display the game.</div>'}
+    if(isHost&&v.ph==='end')body+='<div class="row" style="justify-content:center"><button class="btn p" data-mp="gstart">Play again</button></div>'}
+  return`<div class="gh"><button class="btn" data-mp="lobby">← Leave</button><div class="sp"><h2>${G.name}</h2><span class="badge">${P.length} players${dead?' · disconnected':''}</span></div></div>${dead?'<p class="msg" style="color:#ef4444">Connection lost. Go back and join again.</p>':''}<div class="stage" style="max-width:560px">${body}</div>`}
+
+function peerOpen(code){return new Promise(res=>{let peer,done=false;try{peer=new Peer('nxp-'+code,{debug:0})}catch(e){return res({ok:false})}
+  const t=setTimeout(()=>{if(done)return;done=true;try{peer.destroy()}catch(e){}res({ok:false,why:'timeout'})},7000);
+  peer.on('open',()=>{if(done)return;done=true;clearTimeout(t);res({ok:true,peer})});
+  peer.on('error',err=>{if(done)return;done=true;clearTimeout(t);try{peer.destroy()}catch(e){}res({ok:false,why:err&&err.type})})})}
+
+function mpGroupHost(gk,peer,code){
+  const G=GM[gk];let P=[{name:pname(),av:S.avatar,on:true}],conns={},st=null,started=false,alive=true,endAt=0;
+  const meta=()=>P.map(p=>({name:p.name,av:p.av,on:p.on}));
+  function draw(){if(!alive)return;const v=started?G.pub(st,0,Date.now()):null;endAt=v&&v.ms!=null?Date.now()+v.ms:0;keepInputs(()=>{main.innerHTML=grpPage({G,v,me:0,P,started,code,isHost:true,dead:false})})}
+  function bc(){const now=Date.now();for(const k in conns){try{conns[k].send({t:'s',s:started?G.pub(st,+k,now):null,ps:meta(),st:started,me:+k,code,g:gk})}catch(e){}}draw()}
+  function start(){if(onIds(P).length<G.min)return toast('Need at least '+G.min+' players.');st=G.init(P,Date.now());started=true;bc()}
+  const cd=setInterval(()=>{const e=$('#cd');if(e&&endAt)e.textContent=Math.max(0,Math.ceil((endAt-Date.now())/1000))},250);
+  const iv=setInterval(()=>{if(!alive||!started)return;const n=G.tick(st,Date.now(),P);if(n)bc()},300);
+  cleanup=()=>{alive=false;clearInterval(iv);clearInterval(cd);main.onclick=main.oninput=main.onkeydown=null;for(const k in conns){try{conns[k].close()}catch(e){}}try{peer.destroy()}catch(e){}};
+  peer.on('connection',conn=>{let id=-1;
+    conn.on('open',()=>{try{conn.send({t:'hello',g:gk,grp:1,n:pname(),a:S.avatar})}catch(e){}});
+    conn.on('data',d=>{if(!alive||!d)return;
+      if(id<0){if(d.t==='hello'){if(started||P.length>=G.max){try{conn.send({t:'full'})}catch(e){}setTimeout(()=>{try{conn.close()}catch(e){}},400);return}
+        id=P.length;P.push({name:cleanP({name:d.n}).name,av:cleanP({av:d.a}).av,on:true});conns[id]=conn;beep(600,.08);bc()}return}
+      if(d.t==='a'&&started){const n=G.act(st,id,d.a,Date.now(),P);if(n)bc()}});
+    const gone=()=>{if(id>=0&&P[id]&&P[id].on){P[id].on=false;delete conns[id];bc()}};
+    conn.on('close',gone);conn.on('error',gone)});
+  peer.on('error',err=>{if(alive)toast('Connection problem: '+(err&&err.type||'unknown'))});
+  const h=e=>{if(main.onclick!==h)return;const x=e.target.closest('[data-mp],[data-ga]');if(!x)return;const m=x.dataset.mp;
+    if(m==='lobby')return go('multiplayer');if(m==='gcopy')return copyText(code);if(m==='gstart')return start();
+    if(x.dataset.ga&&started){let a;try{a=JSON.parse(x.dataset.ga)}catch(er){return}if(x.dataset.gi){const el=document.getElementById(x.dataset.gi);a.v=el?el.value:''}const n=G.act(st,0,a,Date.now(),P);if(n)bc()}};
+  main.onclick=h;main.oninput=main.onkeydown=null;draw();window.scrollTo(0,0)}
+
+function mpGroupGuest(gk,conn,peer,hello){
+  const G=GM[gk];let v=null,P=[{name:cleanP({name:hello.n}).name,av:cleanP({av:hello.a}).av,on:true}],me=-1,started=false,alive=true,dead=false,code='',endAt=0;
+  const cd=setInterval(()=>{const e=$('#cd');if(e&&endAt)e.textContent=Math.max(0,Math.ceil((endAt-Date.now())/1000))},250);
+  cleanup=()=>{alive=false;clearInterval(cd);main.onclick=main.oninput=main.onkeydown=null;try{conn.close()}catch(e){}try{peer.destroy()}catch(e){}};
+  function draw(){if(!alive)return;keepInputs(()=>{main.innerHTML=grpPage({G,v,me,P,started,code,isHost:false,dead})})}
+  conn.on('data',d=>{if(!alive||!d)return;
+    if(d.t==='s'){v=d.s;if(Array.isArray(d.ps))P=d.ps.slice(0,12).map(p=>({name:cleanP({name:p&&p.name}).name,av:cleanP({av:p&&p.av}).av,on:!!(p&&p.on)}));
+      me=Number.isInteger(d.me)?d.me:me;started=!!d.st;code=String(d.code||'').slice(0,6);endAt=v&&v.ms!=null?Date.now()+v.ms:0;draw()}
+    else if(d.t==='full'){alive=false;clearInterval(cd);main.innerHTML=dShell(G.name,'<p class="msg">This room is full or the game has already started.</p>')}});
+  conn.on('close',()=>{if(alive){dead=true;draw()}});
+  const h=e=>{if(main.onclick!==h)return;const x=e.target.closest('[data-mp],[data-ga]');if(!x)return;
+    if(x.dataset.mp==='lobby')return go('multiplayer');if(dead)return;
+    if(x.dataset.ga){let a;try{a=JSON.parse(x.dataset.ga)}catch(er){return}if(x.dataset.gi){const el=document.getElementById(x.dataset.gi);a.v=el?el.value:''}try{conn.send({t:'a',a})}catch(er){}}};
+  main.onclick=h;main.oninput=main.onkeydown=null;draw();window.scrollTo(0,0);toast('Joined! 🎉')}
+
+async function mpGroupCreate(gk,say){
+  say('Creating group room…');
+  if(!(await loadPeer()))return say('Group games need the online connection service (PeerJS), which could not load here. Try another network or browser.');
+  for(let n=0;n<3;n++){const code=mkCode(),r=await peerOpen(code);if(r.ok)return mpGroupHost(gk,r.peer,code);if(r.why!=='unavailable-id')break}
+  say('Could not reach the online service. Group games need it — try another network, or use Pass & play for two players.')}
+
+/* join over PeerJS: handles both 2-player and group rooms */
+function mpPeerJoin(code,say){
+  return loadPeer().then(ok=>{if(!ok)return false;say('Connecting to '+code+'…');
+    return new Promise(res=>{let peer,done=false,grp=false;
+      const fail=()=>{if(done)return;done=true;try{peer&&peer.destroy()}catch(e){}res(false)};
+      try{peer=new Peer({debug:0})}catch(e){return res(false)}
+      const t=setTimeout(fail,9000);peer.on('error',fail);
+      peer.on('open',()=>{const conn=peer.connect('nxp-'+code,{serialization:'json',reliable:true}),sh=mkShim(conn,peer);let got=false;
+        conn.on('error',fail);conn.on('open',()=>conn.send({t:'hello',n:pname(),a:S.avatar}));
+        conn.on('data',d=>{if(grp)return;
+          if(!got){if(d&&d.t==='hello'&&!done&&(MP[d.g]||GM[d.g])){got=true;done=true;clearTimeout(t);res(true);
+              if(GM[d.g]){grp=true;mpGroupGuest(d.g,conn,peer,d)}
+              else mpDirectPlay({host:false,gk:d.g,dc:sh.dc,pc:sh.pc,peer:{name:cleanP({name:d.n}).name,av:cleanP({av:d.a}).av}})}return}
+          sh.dc.onmessage&&sh.dc.onmessage({data:d})});
+        conn.on('close',()=>{if(!grp)sh.dc.onclose&&sh.dc.onclose()})})})})}
+
+async function mpCreate(gk,say){
+  if(GM[gk])return mpGroupCreate(gk,say);
+  if(!MP[gk])return;say('Creating game…');
+  if(await mpPeerHost(gk))return;
+  say('Online service unreachable — trying shared storage…');let code=null;
+  for(let i=0;i<4;i++){const c=mkCode(),ex=await sget('room:'+c);if(!ex||ex.status==='closed'||Date.now()-ex.t>120000){code=c;break}}
+  const room=code&&{code,game:gk,host:{id:pid(),name:pname(),av:S.avatar},guest:null,status:'waiting',state:null,v:0,t:Date.now()};
+  if(!room||!(await sset('room:'+code,room))){toast('No online service reachable — using manual codes.');return mpDirectHost(gk)}
+  await sset('room:'+code+':g',{guest:null,seq:0,act:null,hb:0});
+  mpRoom({role:'host',code,gk,room})}
+
+/* ---------- multiplayer lobby v5: party games + 2-player games ---------- */
+function mpLobby(){
+  const rec=S.mp||(S.mp={w:0,l:0,d:0});let busy=false;
+  const two=Object.keys(MP).map(k=>`<option value="${k}">${MP[k].name}</option>`).join('');
+  const party=Object.keys(GM).map(k=>`<option value="${k}">${GM[k].name} (${GM[k].min}–${GM[k].max} players)</option>`).join('');
+  const fld='height:50px;border-radius:12px;border:1px solid var(--bd);background:var(--card);padding:0 12px;width:100%;margin:6px 0 12px';
+  main.innerHTML=`<div class="sh"><div><h1 style="font-size:clamp(26px,5vw,36px)">Multiplayer</h1><p>Play with friends on their own phones or computers — 2 to 8 players.</p></div></div>
+  <section id="room-box" style="margin-top:0"><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))">
+    <div class="card pad"><h3>Create a room</h3><p class="muted">Pick a game, get a 6-letter code and share it with your friends.</p>
+      <label class="muted" for="cg">Game</label><select id="cg" style="${fld}"><optgroup label="Party games (3+ players)">${party}</optgroup><optgroup label="Two-player games">${two}</optgroup></select>
+      <button class="btn p" data-mp="create" style="width:100%;min-height:52px;font-size:16px">Create room</button></div>
+    <div class="card pad"><h3>Join a room</h3><p class="muted">Type the 6-letter code your friend gave you.</p>
+      <label class="muted" for="mpc">Room code</label><input id="mpc" maxlength="6" placeholder="CODE" autocomplete="off" autocapitalize="characters" style="${fld};text-align:center;font-size:22px;letter-spacing:.2em;font-weight:800">
+      <button class="btn p" data-mp="join" style="width:100%;min-height:52px;font-size:16px">Join room</button></div>
+  </div><p class="msg" id="mpmsg" role="status" style="margin-top:12px"></p></section>
+  <div class="card pad" style="margin-top:6px"><div class="ctl"><label>Your name <input id="mpn" maxlength="16" value="${esc(pname())}" aria-label="Your name" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 10px;margin-left:6px;width:min(50vw,200px)"></label><span class="muted">${S.avatar} · ${rec.w}W · ${rec.l}L · ${rec.d}D</span></div></div>
+  ${sec('Party games','For 2–8 players, each on their own device. Create a room and share the code.',`<div class="grid">${Object.keys(GM).map(k=>gmCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
+  ${sec('Two-player games','Online with a friend — Tic-Tac-Toe, Connect Four, Chess and more.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
+  ${sec('Pass & play','Two players, one device — take turns.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play on this device','data-mp="local" data-g="'+k+'"')).join('')}</div>`)}
+  <section><details class="card pad"><summary style="font-weight:700;cursor:pointer;min-height:28px">Manual codes (two-player backup if the online service is blocked)</summary>
+    <p class="muted" style="margin:8px 0">Connect by swapping two long codes by message.</p>
+    <div class="row" style="padding:0"><select id="dg" aria-label="Game" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 8px"><optgroup label="Party games">${party}</optgroup><optgroup label="Two-player games">${two}</optgroup></select><button class="btn" data-mp="dhost">Host with manual codes</button><button class="btn" data-mp="djoin">Join with manual codes</button></div></details></section>`;
+  const say=m=>{const e=$('#mpmsg');if(e){e.textContent=m;e.scrollIntoView({block:'nearest',behavior:'smooth'})}toast(m)};
+  const h=async e=>{if(main.onclick!==h||busy)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
+    if(a==='local')mpLocal(x.dataset.g);
+    else if(a==='dhost')mpDirectHost($('#dg').value);
+    else if(a==='djoin')mpDirectJoin();
+    else if(a==='create'){busy=true;await mpCreate(x.dataset.g||$('#cg').value,say);busy=false}
+    else if(a==='join'){busy=true;await mpJoin($('#mpc').value,say);busy=false}};
+  main.onclick=h;
+  main.oninput=e=>{if(e.target.id==='mpn'){const v=e.target.value.trim().slice(0,16);if(v){S.name=v;save()}}else if(e.target.id==='mpc')e.target.value=e.target.value.toUpperCase().replace(/[^A-Z2-9]/g,'').slice(0,6)};
+  main.onkeydown=e=>{if(e.key==='Enter'&&e.target.id==='mpc')h({target:$('[data-mp=join]')})};
+  cleanup=()=>{main.onclick=main.oninput=main.onkeydown=null}}
+
+setTimeout(()=>{INFO.About=`${BRAND} is a browser game hub with 16 solo and vs-AI games, five two-player games, and four party games for 2–8 players (Quiz Blitz, Outsmart the Crowd, Pass the Bomb, Odd One Out). A dedicated game server and accounts are planned.`;
+  INFO.FAQ='Do I need an account? No. Can more than two people play? Yes — the party games support up to 8 players, each on their own device, using a 6-letter room code. This needs a free public connection service (PeerJS); if it is blocked on your network, party games will not start. Where is my progress saved? In this browser only.'},0);
+
+/* ---------- fallback when the online service is blocked: manual-code group rooms ---------- */
+function rtcConn(dc){
+  const H={data:[],close:[],open:[],error:[]};
+  const c={on(e,f){(H[e]||(H[e]=[])).push(f);if(e==='open'&&dc.readyState==='open')setTimeout(f,0);return c},
+    send(o){dc.send(JSON.stringify(o))},close(){try{dc.close()}catch(e){}}};
+  dc.onmessage=ev=>{let m;try{m=JSON.parse(ev.data)}catch(e){return}H.data.forEach(f=>f(m))};
+  dc.onclose=()=>H.close.forEach(f=>f());
+  dc.onerror=()=>H.error.forEach(f=>f());
+  return c}
+
+function grpPage({G,v,me,P,started,code,isHost,dead}){
+  const pl=P.map((p,i)=>`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:22px">${p.av}</span><b>${esc(p.name)}</b><span class="muted">${i===0?'host':''}${i===me?' · you':''}</span><span style="width:9px;height:9px;border-radius:50%;display:inline-block;background:${p.on?'#22c55e':'#ef4444'}"></span></div>`).join('');
+  let body;
+  if(!started||!v){body=`<div class="card pad"><div class="ctl"><div><span class="muted">Room</span><div style="font-size:${code?34:20}px;font-weight:900;letter-spacing:.2em">${code?esc(code):'Manual codes'}</div></div>${isHost&&code?'<button class="btn" data-mp="gcopy">Copy code</button>':''}</div>
+    <p class="muted" style="margin:8px 0">${G.how}</p><b>Players (${P.length}/${G.max})</b><div style="display:grid;gap:8px;margin-top:8px">${pl}</div>
+    ${isHost?`<div class="row" style="padding-top:14px"><button class="btn p" data-mp="gstart" ${onIds(P).length<G.min?'disabled':''}>Start game</button><span class="muted">Needs ${G.min}+ players</span></div>${window.__grpManual&&P.length<G.max?'<div class="row" style="padding-top:8px"><button class="btn" data-mp="gadd">➕ Add a player (manual code)</button></div>':''}`:'<p class="msg">Waiting for the host to start…</p>'}</div>`}
+  else{try{body=G.view(v,me,P)}catch(e){body='<div class="card pad empty">Could not display the game.</div>'}
+    if(isHost&&v.ph==='end')body+='<div class="row" style="justify-content:center"><button class="btn p" data-mp="gstart">Play again</button></div>'}
+  return`<div class="gh"><button class="btn" data-mp="lobby">← Leave</button><div class="sp"><h2>${G.name}</h2><span class="badge">${P.length} players${dead?' · disconnected':''}</span></div></div>${dead?'<p class="msg" style="color:#ef4444">Connection lost. Go back and join again.</p>':''}<div class="stage" style="max-width:560px">${body}</div>`}
+
+async function mpPeerHost(gk){
+  if(window.__peerBad||!(await loadPeer()))return false;
+  for(let n=0;n<2;n++){const code=mkCode(),r=await peerOpen(code);if(r.ok)return mpPeerWait(gk,r.peer,code);if(r.why!=='unavailable-id'){window.__peerBad=true;return false}}
+  return false}
+
+async function mpGroupCreate(gk,say){
+  if(!window.__peerBad){say('Creating group room…');
+    if(await loadPeer()){const code=mkCode(),r=await peerOpen(code);if(r.ok)return mpGroupHost(gk,r.peer,code);window.__peerBad=true}else window.__peerBad=true}
+  toast('Online service is blocked here — using manual codes for this group.');
+  return mpGroupHostManual(gk)}
+
+async function mpJoin(raw,say){
+  const code=String(raw||'').trim().toUpperCase();if(!/^[A-Z2-9]{6}$/.test(code))return say('Room codes are 6 letters/numbers.');
+  say('Looking for the room…');
+  const r=await sget('room:'+code);
+  if(r&&r.status!=='closed'&&MP[r.game]){
+    if(r.guest&&r.guest.id!==pid())return say('That room is already full.');
+    const old=await sget('room:'+code+':g'),seq=old&&old.guest&&old.guest.id===pid()?(old.seq||0):0;
+    if(!(await sset('room:'+code+':g',{guest:{id:pid(),name:pname(),av:S.avatar},seq,act:null,hb:Date.now()})))return say('Could not reach shared storage.');
+    return mpRoom({role:'guest',code,gk:r.game,room:r,seq})}
+  if(!window.__peerBad&&await mpPeerJoin(code,say))return;
+  say('Room not found. If your host is using manual codes, open "Manual codes" at the bottom of this page and tap "Join with manual codes". Otherwise check the code.')}
+
+function mpGroupHostManual(gk){
+  if(!window.RTCPeerConnection)return toast('Direct connection isn\'t supported in this browser.');
+  const pcs=[],H={};let addEl=null;
+  const fake={on(e,f){H[e]=f},destroy(){pcs.forEach(p=>{try{p.close()}catch(e){}})}};
+  window.__grpManual=true;
+  mpGroupHost(gk,fake,'');
+  const closeAdd=()=>{if(addEl){addEl.remove();addEl=null}};
+  const base=cleanup;
+  const onAdd=e=>{if(e.target.closest('[data-mp="gadd"]'))openAdd()};
+  main.addEventListener('click',onAdd);
+  cleanup=()=>{window.__grpManual=false;closeAdd();main.removeEventListener('click',onAdd);if(base)base()};
+  async function openAdd(){
+    closeAdd();
+    let pc,dc;try{pc=new RTCPeerConnection(RTC_CFG);dc=pc.createDataChannel('g')}catch(e){return toast('Could not start a direct connection here.')}
+    pcs.push(pc);
+    const el=document.createElement('div');addEl=el;
+    el.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:80;display:grid;place-items:center;padding:16px';
+    el.innerHTML='<div class="card pad" style="max-width:560px;width:100%;max-height:90vh;overflow:auto;background:var(--bg2)"><h3>Add a player</h3><p class="muted" id="gast">Creating invite code…</p><div id="gabody"></div><div class="row"><button class="btn" id="gacl">Close</button></div></div>';
+    document.body.appendChild(el);
+    const st=m=>{const e=el.querySelector('#gast');if(e)e.textContent=m};
+    el.querySelector('#gacl').onclick=()=>{if(addEl===el)closeAdd()};
+    dc.onopen=()=>{if(addEl===el)closeAdd();if(H.connection)H.connection(rtcConn(dc))};
+    pc.onconnectionstatechange=()=>{if(pc.connectionState==='failed')st('Could not connect — try both devices on the same Wi-Fi.')};
+    try{await pc.setLocalDescription(await pc.createOffer());await iceDone(pc);
+      const code=b64e({g:gk,grp:1,n:pname(),a:S.avatar,s:pc.localDescription.sdp});
+      el.querySelector('#gabody').innerHTML=`<p><b>Step 1</b> — send this invite code to the player:</p><textarea id="dout" readonly onfocus="this.select()" style="${TA}">${code}</textarea><div class="row"><button class="btn p" id="gacp">Copy invite code</button></div><p style="margin-top:12px"><b>Step 2</b> — paste the reply code they send back:</p><textarea id="gin" style="${TA}" placeholder="Paste reply code here"></textarea><div class="row"><button class="btn p" id="gaap">Connect</button></div>`;
+      st('Waiting for the player…');
+      el.querySelector('#gacp').onclick=()=>copyText(code);
+      el.querySelector('#gaap').onclick=async()=>{try{const r=b64d(el.querySelector('#gin').value);if(typeof r.s!=='string'||r.s.length>20000)throw 0;st('Connecting…');await pc.setRemoteDescription({type:'answer',sdp:r.s})}catch(er){st('That reply code isn\'t valid. Paste the whole code.')}}}
+    catch(er){st('Could not create an invite code on this network.')}}}
+
+async function mpGroupJoinFrom(inv,st){
+  let pc;try{pc=new RTCPeerConnection(RTC_CFG)}catch(e){return st('Could not start a direct connection here.')}
+  const base=cleanup;cleanup=()=>{try{pc.close()}catch(e){}if(base)base()};
+  st('Creating reply code…');
+  try{
+    pc.ondatachannel=ev=>{const dc=ev.channel;
+      const begin=()=>{const conn=rtcConn(dc);let got=false;
+        conn.on('data',d=>{if(got||!d||d.t!=='hello'||!GM[d.g])return;got=true;conn.send({t:'hello',n:pname(),a:S.avatar});mpGroupGuest(d.g,conn,{destroy(){try{pc.close()}catch(e){}}},d)})};
+      if(dc.readyState==='open')begin();else dc.onopen=begin};
+    pc.onconnectionstatechange=()=>{if(pc.connectionState==='failed')st('Could not connect — try both devices on the same Wi-Fi.')};
+    await pc.setRemoteDescription({type:'offer',sdp:inv.s});await pc.setLocalDescription(await pc.createAnswer());await iceDone(pc);
+    const code=b64e({n:pname(),a:S.avatar,s:pc.localDescription.sdp});
+    const box=$('#dstep2');if(box)box.innerHTML=`<div class="card pad"><b>Step 2</b> — send this reply code back to the host, then keep this page open:<textarea id="dout" readonly onfocus="this.select()" style="${TA}">${code}</textarea><div class="row"><button class="btn p" data-mp="copy">Copy reply code</button></div></div>`;
+    st('Waiting for the host to connect…')}
+  catch(er){st('Could not create a reply — is the invite code complete?')}}
+
+/* ---------- 6-digit rooms for group games over shared storage (no outside service needed) ---------- */
+function peerOpen(code){return new Promise(res=>{let peer,done=false;try{peer=new Peer('nxp-'+code,{debug:0})}catch(e){return res({ok:false})}
+  const t=setTimeout(()=>{if(done)return;done=true;try{peer.destroy()}catch(e){}res({ok:false,why:'timeout'})},4500);
+  peer.on('open',()=>{if(done)return;done=true;clearTimeout(t);res({ok:true,peer})});
+  peer.on('error',err=>{if(done)return;done=true;clearTimeout(t);try{peer.destroy()}catch(e){}res({ok:false,why:err&&err.type})})})}
+
+function storeHostPeer(gk,code){
+  const KR='grp:'+code,KA=KR+':a:',H={},vc={},stt={},gone={},views={};
+  let v=0,alive=true,timer=null,flushT=null,busy=false,lastFlush=Date.now();
+  async function flush(){if(!alive)return;v++;lastFlush=Date.now();await sset(KR,{g:gk,host:{name:pname(),av:S.avatar},views,v,t:Date.now()})}
+  const sched=()=>{if(!flushT)flushT=setTimeout(()=>{flushT=null;flush()},120)};
+  function mk(gid){
+    const hs={data:[],close:[],open:[],error:[]};
+    const c={on(e,f){(hs[e]||(hs[e]=[])).push(f);if(e==='open')setTimeout(f,0);return c},
+      send(o){if(!o||o.t==='hello')return;views[gid]=o;sched()},
+      close(){delete vc[gid]},
+      emit(e,d){(hs[e]||[]).forEach(f=>f(d))}};
+    return c}
+  async function poll(){
+    if(busy||!alive)return;busy=true;
+    try{
+      const L=await tmo(window.storage.list(KA,true),4000),keys=(L&&L.keys)||[],have={};
+      for(const k of keys){const ks=String(k),gid=ks.startsWith(KA)?ks.slice(KA.length):ks,g=await sget(KA+gid);
+        if(!g||g.left||!g.id)continue;have[gid]=1;
+        if(!vc[gid]){if(gone[gid]!==undefined&&gone[gid]===g.hb)continue;
+          const c=mk(gid);vc[gid]=c;stt[gid]={seq:g.seq||0,hb:g.hb,seen:Date.now()};delete gone[gid];
+          if(H.connection){H.connection(c);setTimeout(()=>c.emit('data',{t:'hello',n:g.name,a:g.av}),0)}}
+        else{const s=stt[gid];if(g.hb!==s.hb){s.hb=g.hb;s.seen=Date.now()}if(g.act&&g.seq>s.seq){s.seq=g.seq;vc[gid].emit('data',{t:'a',a:g.act})}}}
+      for(const gid in vc){const s=stt[gid];if(!have[gid]||Date.now()-s.seen>25000){const c=vc[gid];gone[gid]=s.hb;delete vc[gid];delete views[gid];c.emit('close')}}
+    }catch(e){}
+    busy=false;
+    if(alive&&Date.now()-lastFlush>8000)sched()}
+  return{on(e,f){H[e]=f},
+    start(){timer=setInterval(poll,1400);poll()},
+    destroy(){if(!alive)return;alive=false;clearInterval(timer);clearTimeout(flushT);
+      (async()=>{await sset(KR,{g:gk,closed:true,views:{},v:v+1,t:Date.now()});try{await window.storage.delete(KR,true)}catch(e){}})()}}}
+
+function storeGuestConn(code){
+  const KR='grp:'+code,id=pid(),KA=KR+':a:'+id,H={data:[],close:[],open:[],error:[]};
+  let seq=0,act=null,alive=true,lastV=-1,seenT=null,seenAt=Date.now(),timer=null,hbAt=0,busy=false;
+  const emit=(e,d)=>(H[e]||[]).forEach(f=>f(d));
+  const writeA=()=>{hbAt=Date.now();return sset(KA,{id,name:pname(),av:S.avatar,seq,act,hb:Date.now()})};
+  function stop(){alive=false;clearInterval(timer)}
+  async function poll(){
+    if(busy||!alive)return;busy=true;
+    try{const r=await sget(KR);if(!alive){busy=false;return}
+      if(!r||r.closed){stop();emit('close');busy=false;return}
+      if(r.t!==seenT){seenT=r.t;seenAt=Date.now()}
+      if(r.v!==lastV){lastV=r.v;const m=r.views&&r.views[id];if(m)emit('data',m)}
+      if(Date.now()-seenAt>25000){stop();emit('close');busy=false;return}
+      if(Date.now()-hbAt>8000)await writeA()}catch(e){}
+    busy=false}
+  const c={on(e,f){(H[e]||(H[e]=[])).push(f);if(e==='open')setTimeout(f,0);return c},
+    send(o){if(!alive||!o||o.t!=='a')return;seq++;act=o.a;writeA()},
+    close(){if(!alive)return;stop();sset(KA,{id,left:true,seq,act:null,hb:0});try{window.storage.delete(KA,true)}catch(e){}},
+    join:()=>writeA(),
+    start(){timer=setInterval(poll,1300);poll()}};
+  return c}
+
+async function mpStoreJoin(code,say,r0){
+  const r=r0||await sget('grp:'+code);
+  if(!r||r.closed||!GM[r.g]||Date.now()-r.t>300000)return false;
+  const conn=storeGuestConn(code);say('Joining…');
+  if(!(await conn.join()))return false;
+  mpGroupGuest(r.g,conn,{destroy(){conn.close()}},{n:cleanP({name:r.host&&r.host.name}).name,a:cleanP({av:r.host&&r.host.av}).av});
+  conn.start();return true}
+
+async function mpGroupCreate(gk,say){
+  say('Creating room…');
+  if(!window.__peerBad){
+    if(await loadPeer()){const c0=mkCode(),r=await peerOpen(c0);if(r.ok)return mpGroupHost(gk,r.peer,c0);window.__peerBad=true}else window.__peerBad=true}
+  let code=null;
+  for(let i=0;i<4;i++){const c=mkCode(),ex=await sget('grp:'+c);if(!ex||ex.closed||Date.now()-ex.t>300000){code=c;break}}
+  if(code&&await sset('grp:'+code,{g:gk,host:{name:pname(),av:S.avatar},views:{},v:0,t:Date.now()})){
+    const peer=storeHostPeer(gk,code);mpGroupHost(gk,peer,code);peer.start();return}
+  toast('Shared storage is not available either — using manual codes for this group.');
+  return mpGroupHostManual(gk)}
+
+async function mpJoin(raw,say){
+  const code=String(raw||'').replace(/\D/g,'');if(code.length!==6)return say('Enter the 6-digit room code.');
+  say('Looking for the room…');
+  const [r,g]=await Promise.all([sget('room:'+code),sget('grp:'+code)]);
+  if(g&&!g.closed&&GM[g.g]&&Date.now()-g.t<300000){if(await mpStoreJoin(code,say,g))return;return say('Could not join — shared storage did not respond.')}
+  if(r&&r.status!=='closed'&&MP[r.game]){
+    if(r.guest&&r.guest.id!==pid())return say('That room is already full.');
+    const old=await sget('room:'+code+':g'),seq=old&&old.guest&&old.guest.id===pid()?(old.seq||0):0;
+    if(!(await sset('room:'+code+':g',{guest:{id:pid(),name:pname(),av:S.avatar},seq,act:null,hb:Date.now()})))return say('Could not reach shared storage.');
+    return mpRoom({role:'guest',code,gk:r.game,room:r,seq})}
+  if(!window.__peerBad&&await mpPeerJoin(code,say))return;
+  say('Room not found. Check the 6-digit code and make sure the host is waiting with the page open. (If the host used manual codes, use "Join with manual codes" at the bottom.)')}
+
+/* ---------- multiplayer lobby v6: 6-digit codes ---------- */
+function mpLobby(){
+  const rec=S.mp||(S.mp={w:0,l:0,d:0});let busy=false;
+  const two=Object.keys(MP).map(k=>`<option value="${k}">${MP[k].name}</option>`).join('');
+  const party=Object.keys(GM).map(k=>`<option value="${k}">${GM[k].name} (${GM[k].min}–${GM[k].max} players)</option>`).join('');
+  const fld='height:50px;border-radius:12px;border:1px solid var(--bd);background:var(--card);padding:0 12px;width:100%;margin:6px 0 12px';
+  main.innerHTML=`<div class="sh"><div><h1 style="font-size:clamp(26px,5vw,36px)">Multiplayer</h1><p>Play with friends on their own phones or computers — 2 to 8 players.</p></div></div>
+  <section id="room-box" style="margin-top:0"><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))">
+    <div class="card pad"><h3>Create a room</h3><p class="muted">Pick a game, get a 6-digit code and share it with your friends.</p>
+      <label class="muted" for="cg">Game</label><select id="cg" style="${fld}"><optgroup label="Party games (3+ players)">${party}</optgroup><optgroup label="Two-player games">${two}</optgroup></select>
+      <button class="btn p" data-mp="create" style="width:100%;min-height:52px;font-size:16px">Create room</button></div>
+    <div class="card pad"><h3>Join a room</h3><p class="muted">Type the 6-digit code your friend gave you.</p>
+      <label class="muted" for="mpc">Room code</label><input id="mpc" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="000000" autocomplete="off" style="${fld};text-align:center;font-size:24px;letter-spacing:.25em;font-weight:800">
+      <button class="btn p" data-mp="join" style="width:100%;min-height:52px;font-size:16px">Join room</button></div>
+  </div><p class="msg" id="mpmsg" role="status" style="margin-top:12px"></p></section>
+  <div class="card pad" style="margin-top:6px"><div class="ctl"><label>Your name <input id="mpn" maxlength="16" value="${esc(pname())}" aria-label="Your name" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 10px;margin-left:6px;width:min(50vw,200px)"></label><span class="muted">${S.avatar} · ${rec.w}W · ${rec.l}L · ${rec.d}D</span></div></div>
+  ${sec('Party games','For 2–8 players, each on their own device. Create a room and share the 6-digit code.',`<div class="grid">${Object.keys(GM).map(k=>gmCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
+  ${sec('Two-player games','Online with a friend — Tic-Tac-Toe, Connect Four, Chess and more.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Create room','data-mp="create" data-g="'+k+'"')).join('')}</div>`)}
+  ${sec('Pass & play','Two players, one device — take turns.',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play on this device','data-mp="local" data-g="'+k+'"')).join('')}</div>`)}
+  <section><details class="card pad"><summary style="font-weight:700;cursor:pointer;min-height:28px">Manual codes (last-resort backup)</summary>
+    <p class="muted" style="margin:8px 0">Only needed if 6-digit rooms can't connect. Swap two long codes by message instead.</p>
+    <div class="row" style="padding:0"><select id="dg" aria-label="Game" style="height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--card);padding:0 8px"><optgroup label="Party games">${party}</optgroup><optgroup label="Two-player games">${two}</optgroup></select><button class="btn" data-mp="dhost">Host with manual codes</button><button class="btn" data-mp="djoin">Join with manual codes</button></div></details></section>`;
+  const say=m=>{const e=$('#mpmsg');if(e){e.textContent=m;e.scrollIntoView({block:'nearest',behavior:'smooth'})}toast(m)};
+  const h=async e=>{if(main.onclick!==h||busy)return;const x=e.target.closest('[data-mp]');if(!x)return;const a=x.dataset.mp;
+    if(a==='local')mpLocal(x.dataset.g);
+    else if(a==='dhost')mpDirectHost($('#dg').value);
+    else if(a==='djoin')mpDirectJoin();
+    else if(a==='create'){busy=true;await mpCreate(x.dataset.g||$('#cg').value,say);busy=false}
+    else if(a==='join'){busy=true;await mpJoin($('#mpc').value,say);busy=false}};
+  main.onclick=h;
+  main.oninput=e=>{if(e.target.id==='mpn'){const v=e.target.value.trim().slice(0,16);if(v){S.name=v;save()}}else if(e.target.id==='mpc')e.target.value=e.target.value.replace(/\D/g,'').slice(0,6)};
+  main.onkeydown=e=>{if(e.key==='Enter'&&e.target.id==='mpc')h({target:$('[data-mp=join]')})};
+  cleanup=()=>{main.onclick=main.oninput=main.onkeydown=null}}
+
+setTimeout(()=>{INFO.FAQ='Do I need an account? No. Can more than two people play? Yes — party games support up to 8 players, each on their own device. Create a room to get a 6-digit code; friends join with that code. Rooms connect through a free online service when available, otherwise through the app\'s shared storage, otherwise through manual codes. Where is my progress saved? In this browser only.'},0);
+
 /* ---------- registry (add new games here) ---------- */
 const GAMES=[
  {id:'ttt',title:'Tic-Tac-Toe',cat:'Board',mode:'Solo vs AI',added:5,quick:1,glyph:'✕ ○',grad:'linear-gradient(135deg,#7c3aed,#22d3ee)',goal:'Win a round against the AI',how:'Get three in a row. You are X. On Hard the AI never loses, so a draw is a great result.',mount:ttt},
@@ -1162,7 +1611,7 @@ function home(){const f=dailyGame(),rec=S.recent.map(byId).filter(Boolean);
  <div class="row" style="padding:0"><button class="btn p" data-play="${f.id}">▶ Play Now</button><button class="btn" data-nav="multiplayer">Play With Friends</button></div></div>
  <div class="card gc"><div class="cover" style="background:${f.grad};aspect-ratio:16/9"><span>${f.glyph}</span></div><div class="cb"><span class="badge" style="align-self:flex-start">Featured today</span><h3>${f.title}</h3><p class="meta">${f.how}</p><div class="row"><button class="btn p" data-play="${f.id}" style="flex:1">▶ Play ${f.title}</button></div></div></div></div>
  ${rec.length?sec('Recently Played','',`<div class="grid">${rec.slice(0,4).map(card).join('')}</div>`):''}
- ${sec('Multiplayer Games','Two players · online rooms or one device',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play with a friend','data-nav="multiplayer"')).join('')}</div>`)}
+ ${sec('Multiplayer Games','Two players · online rooms or one device',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play with a friend','data-nav="multiplayer"')).join('')+Object.keys(GM).map(k=>gmCard(k,'Play with friends','data-nav="multiplayer"')).join('')}</div>`)}
  ${sec('Quick Games','Under three minutes',`<div class="grid">${GAMES.filter(g=>g.quick).map(card).join('')}</div>`)}
  ${sec('Puzzle & Brain Games','',`<div class="grid">${GAMES.filter(g=>g.cat==='Puzzle').map(card).join('')}</div>`)}
  ${sec('Arcade','',`<div class="grid">${GAMES.filter(g=>g.cat==='Arcade').map(card).join('')}</div>`)}
