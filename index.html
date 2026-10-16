@@ -2244,6 +2244,414 @@ setTimeout(()=>{
   INFO.About=`${BRAND} is a browser game hub with solo and vs-AI games (2048, Snake, Chess, Checkers, Minesweeper and more), two-player online games, and party games for up to 8 players. Rooms use a 6-digit code.`;
   INFO.FAQ='Do I need an account? No. Can more than two people play? Yes — party games and Ring Out (live) support up to 8 players, each on their own device, using a 6-digit room code. Codes work when this website is hosted on a normal web host; some app previews block the connection service. Where is my progress saved? In this browser only.'},0);
 
+/* ---------- 3D games (Three.js r128 from cdnjs) ---------- */
+function loadThree(){
+  if(window.THREE)return Promise.resolve(true);
+  if(window.__threeP)return window.__threeP;
+  window.__threeP=new Promise(res=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    s.onload=()=>res(!!window.THREE);s.onerror=()=>res(false);document.head.appendChild(s);setTimeout(()=>res(!!window.THREE),12000)}).then(ok=>{if(!ok)window.__threeP=null;return ok});
+  return window.__threeP}
+const OV3='position:absolute;inset:0;display:grid;place-items:center;text-align:center;background:rgba(8,10,25,.6);border-radius:14px;color:#fff;padding:12px';
+function threeSetup(wrap,aspect){
+  const W=Math.min(wrap.clientWidth||360,420),H=Math.round(W*aspect);let r;
+  try{r=new THREE.WebGLRenderer({antialias:true})}catch(e){return null}
+  r.setPixelRatio(Math.min(window.devicePixelRatio||1,2));r.setSize(W,H,false);wrap.innerHTML='';wrap.appendChild(r.domElement);return{r,W,H}}
+
+/* --- Neon Runner 3D: three-lane endless runner --- */
+function runner3d(el,ctx){
+  let alive=true,cleanFn=null;
+  el.innerHTML=`<div class="ctl"><span>Score <b id="r3s">0</b></span><span>🪙 <b id="r3c">0</b></span><span class="score">Best <b id="r3b">${ctx.best()??0}</b></span></div>
+  <div id="r3w" style="position:relative;max-width:420px;margin:0 auto;width:100%"><p class="msg">Loading 3D engine…</p></div>
+  <div class="row" style="justify-content:center"><button class="btn" id="r3l" style="min-width:72px;min-height:56px" aria-label="Move left">◀</button><button class="btn p" id="r3j" style="min-width:96px;min-height:56px">⤒ Jump</button><button class="btn" id="r3r" style="min-width:72px;min-height:56px" aria-label="Move right">▶</button></div>
+  <p class="muted" style="text-align:center">← → or A D change lane · ↑ / W / Space jump · or swipe on the screen</p>`;
+  loadThree().then(ok=>{if(!alive)return;const w=$('#r3w',el);if(!ok){w.innerHTML='<p class="msg">Could not load the 3D engine. Check your connection and reopen the game.</p>';return}cleanFn=start()});
+  function start(){
+    const wrap=$('#r3w',el),kit=threeSetup(wrap,1.25);
+    if(!kit){wrap.innerHTML='<p class="msg">3D graphics (WebGL) are not available on this device.</p>';return null}
+    const renderer=kit.r,W=kit.W,H=kit.H;
+    const ov=document.createElement('div');ov.style.cssText=OV3;wrap.appendChild(ov);
+    const D=[],geo=g=>{D.push(g);return g},mat=m=>{D.push(m);return m};
+    const scene=new THREE.Scene();scene.background=new THREE.Color(0x0b0d17);scene.fog=new THREE.Fog(0x0b0d17,18,62);
+    const cam=new THREE.PerspectiveCamera(60,W/H,.1,100);cam.position.set(0,4.2,7);cam.lookAt(0,1,-8);
+    scene.add(new THREE.AmbientLight(0x8890ff,.75));const dl=new THREE.DirectionalLight(0xffffff,.9);dl.position.set(3,8,5);scene.add(dl);
+    const LANES=[-1,0,1],LW=2;
+    const gBox=geo(new THREE.BoxGeometry(1,1,1)),gCoin=geo(new THREE.CylinderGeometry(.35,.35,.12,16));
+    const mShort=mat(new THREE.MeshStandardMaterial({color:0xef4444,emissive:0x7f1d1d,emissiveIntensity:.6}));
+    const mTall=mat(new THREE.MeshStandardMaterial({color:0xa855f7,emissive:0x581c87,emissiveIntensity:.6}));
+    const mCoin=mat(new THREE.MeshStandardMaterial({color:0xfacc15,emissive:0xb45309,emissiveIntensity:.8}));
+    const track=new THREE.Mesh(geo(new THREE.PlaneGeometry(7,140)),mat(new THREE.MeshStandardMaterial({color:0x14173a,roughness:.95})));
+    track.rotation.x=-Math.PI/2;track.position.set(0,0,-50);scene.add(track);
+    const mRail=mat(new THREE.MeshBasicMaterial({color:0x22d3ee})),mRail2=mat(new THREE.MeshBasicMaterial({color:0xf43f8e}));
+    [-3.6,3.6].forEach((x,i)=>{const m=new THREE.Mesh(gBox,i?mRail2:mRail);m.scale.set(.18,.3,140);m.position.set(x,.15,-50);scene.add(m)});
+    const dashM=mat(new THREE.MeshBasicMaterial({color:0x3a3f8f})),dashes=[];
+    for(let i=0;i<24;i++)for(const x of[-1,1]){const m=new THREE.Mesh(gBox,dashM);m.scale.set(.08,.02,2);m.position.set(x,.02,8-i*5);scene.add(m);dashes.push(m)}
+    const player=new THREE.Mesh(gBox,mat(new THREE.MeshStandardMaterial({color:0x22d3ee,emissive:0x0e7490,emissiveIntensity:.7})));player.scale.set(.9,.9,.9);player.position.set(0,.45,0);scene.add(player);
+    let state='ready',lane=0,px=0,py=0,vy=0,speed=14,dist=0,coins=0,score=0,spawnAcc=0,gap=17,hudT=0,raf=0,last=performance.now(),objs=[];
+    const hud=()=>{const a=$('#r3s',el),b=$('#r3c',el);if(a)a.textContent=score;if(b)b.textContent=coins};
+    function addObs(l,tall){const h=tall?2.4:.9,m=new THREE.Mesh(gBox,tall?mTall:mShort);m.scale.set(1.6,h,tall?.8:.6);m.position.set(l*LW,h/2,-70);scene.add(m);objs.push({m,type:'o',h})}
+    function addCoin(l,z){const m=new THREE.Mesh(gCoin,mCoin);m.rotation.z=Math.PI/2;m.position.set(l*LW,1.1,z);scene.add(m);objs.push({m,type:'c',got:false})}
+    function spawnRow(){const free=LANES[Math.random()*3|0];
+      for(const l of LANES){if(l===free)continue;if(Math.random()<.8)addObs(l,Math.random()<.45)}
+      if(Math.random()<.75)for(let k=0;k<4;k++)addCoin(free,-70-k*2.2)}
+    function reset(){objs.forEach(o=>scene.remove(o.m));objs=[];lane=0;px=0;py=0;vy=0;speed=14;dist=0;coins=0;score=0;spawnAcc=0;gap=17;player.rotation.set(0,0,0);hud()}
+    function jump(){if(state==='run'&&py<=.001){vy=12.9;ctx.beep(600,.06)}}
+    function move(d){if(state!=='run')return;lane=Math.max(-1,Math.min(1,lane+d));ctx.beep(420,.03)}
+    function crash(){state='over';ctx.beep(140,.3);hud();ctx.rec('play',score);const b=$('#r3b',el);if(b)b.textContent=ctx.best()??0;
+      ov.style.display='grid';ov.innerHTML=`<div><h2>Crashed!</h2><p style="margin:8px 0">Score <b>${score}</b> · Coins <b>${coins}</b></p><button class="btn p" id="r3go">Play again</button></div>`}
+    function update(dt){
+      speed=Math.min(34,speed+dt*.35);const dz=speed*dt;dist+=dz;
+      px+=(lane*LW-px)*Math.min(1,dt*14);
+      vy-=38*dt;py+=vy*dt;if(py<=0){py=0;vy=0}
+      player.position.set(px,.45+py,0);if(py<=.001)player.rotation.x-=dz*.9;
+      dashes.forEach(d=>{d.position.z+=dz;if(d.position.z>8)d.position.z-=120});
+      spawnAcc+=dz;if(spawnAcc>=gap){spawnAcc=0;gap=Math.max(11,17-speed*.18);spawnRow()}
+      for(let i=objs.length-1;i>=0;i--){const o=objs[i],m=o.m;m.position.z+=dz;
+        if(o.type==='c'){m.rotation.y+=dt*5;
+          if(!o.got&&Math.abs(m.position.z)<.9&&Math.abs(m.position.x-px)<1&&py<2.2){o.got=true;coins++;ctx.beep(900,.05)}}
+        else if(Math.abs(m.position.z)<(o.h>1?.95:.8)&&Math.abs(m.position.x-px)<1&&py<o.h-.05){crash();return}
+        if(m.position.z>7||o.got){scene.remove(m);objs.splice(i,1)}}
+      score=Math.floor(dist/4)+coins*10;hudT+=dt;if(hudT>.1){hudT=0;hud()}
+      cam.position.x=px*.4;cam.lookAt(px*.2,1,-8)}
+    function frame(ts){raf=requestAnimationFrame(frame);const dt=Math.min(.04,(ts-last)/1000||0);last=ts;
+      if(state==='run')update(dt);else player.rotation.y+=dt;renderer.render(scene,cam)}
+    ov.innerHTML='<div><h2>Neon Runner 3D</h2><p style="margin:8px 0">Switch lanes, jump the red barriers, grab the coins.</p><button class="btn p" id="r3go">Start</button></div>';
+    el.onclick=e=>{const x=e.target.closest('button');if(!x)return;
+      if(x.id==='r3l')move(-1);else if(x.id==='r3r')move(1);else if(x.id==='r3j')jump();
+      else if(x.id==='r3go'){if(state==='paused'){state='run';last=performance.now()}else{reset();state='run'}ov.style.display='none'}
+      x.blur()};
+    const kd=e=>{if(state!=='run')return;const k=e.key.length===1?e.key.toLowerCase():e.key;
+      if(k==='ArrowLeft'||k==='a'){e.preventDefault();move(-1)}else if(k==='ArrowRight'||k==='d'){e.preventDefault();move(1)}
+      else if(k==='ArrowUp'||k==='w'||k===' '){e.preventDefault();jump()}};
+    let sx=0,sy=0;
+    const pd=e=>{sx=e.clientX;sy=e.clientY};
+    const pu=e=>{if(state!=='run')return;const dx=e.clientX-sx,dy=e.clientY-sy;
+      if(Math.max(Math.abs(dx),Math.abs(dy))<20){jump();return}
+      if(Math.abs(dx)>Math.abs(dy))move(dx>0?1:-1);else if(dy<0)jump()};
+    const vis=()=>{if(document.hidden&&state==='run'){state='paused';ov.style.display='grid';ov.innerHTML='<div><h2>Paused</h2><button class="btn p" id="r3go">Resume</button></div>'}};
+    document.addEventListener('keydown',kd);document.addEventListener('visibilitychange',vis);wrap.addEventListener('pointerdown',pd);wrap.addEventListener('pointerup',pu);
+    raf=requestAnimationFrame(frame);
+    return()=>{cancelAnimationFrame(raf);document.removeEventListener('keydown',kd);document.removeEventListener('visibilitychange',vis);wrap.removeEventListener('pointerdown',pd);wrap.removeEventListener('pointerup',pu);el.onclick=null;
+      D.forEach(x=>{try{x.dispose()}catch(e){}});try{renderer.dispose();if(renderer.forceContextLoss)renderer.forceContextLoss()}catch(e){}}}
+  return()=>{alive=false;if(cleanFn)cleanFn()}}
+
+/* --- Tower Stack 3D: tap to drop the sliding block --- */
+function stack3d(el,ctx){
+  let alive=true,cleanFn=null;
+  el.innerHTML=`<div class="ctl"><span>Height <b id="s3s">0</b></span><span id="s3c" class="score"></span><span class="score">Best <b id="s3b">${ctx.best()??0}</b></span></div>
+  <div id="s3w" style="position:relative;max-width:420px;margin:0 auto;width:100%"><p class="msg">Loading 3D engine…</p></div>
+  <div class="row" style="justify-content:center"><button class="btn p" id="s3d" style="min-width:180px;min-height:56px">⬇ Drop block</button></div>
+  <p class="muted" style="text-align:center">Tap the screen, press Space or tap Drop to place the block. Line it up exactly for a perfect bonus!</p>`;
+  loadThree().then(ok=>{if(!alive)return;const w=$('#s3w',el);if(!ok){w.innerHTML='<p class="msg">Could not load the 3D engine. Check your connection and reopen the game.</p>';return}cleanFn=start()});
+  function start(){
+    const wrap=$('#s3w',el),kit=threeSetup(wrap,1.25);
+    if(!kit){wrap.innerHTML='<p class="msg">3D graphics (WebGL) are not available on this device.</p>';return null}
+    const renderer=kit.r,W=kit.W,H=kit.H;
+    const ov=document.createElement('div');ov.style.cssText=OV3;wrap.appendChild(ov);
+    const D=[],geo=g=>{D.push(g);return g},mat=m=>{D.push(m);return m};
+    const scene=new THREE.Scene();scene.background=new THREE.Color(0x151a3d);
+    const asp=W/H,vs=5.2,cam=new THREE.OrthographicCamera(-vs*asp,vs*asp,vs,-vs,.1,100);
+    scene.add(new THREE.AmbientLight(0xffffff,.6));const dl=new THREE.DirectionalLight(0xffffff,.8);dl.position.set(5,10,3);scene.add(dl);
+    const BH=.5,RANGE=3.4,gBox=geo(new THREE.BoxGeometry(1,1,1));
+    let state='ready',stackArr=[],cur=null,axis='x',t=0,score=0,combo=0,camY=0,level=1,raf=0,last=performance.now();const all=[],falls=[];
+    const colorFor=i=>new THREE.Color().setHSL(((i*14)%360)/360,.65,.58);
+    function mkBlock(x,z,w,d,i){const m=new THREE.Mesh(gBox,mat(new THREE.MeshLambertMaterial({color:colorFor(i)})));m.scale.set(w,BH,d);m.position.set(x,i*BH+BH/2,z);scene.add(m);all.push(m);return m}
+    const hud=()=>{const a=$('#s3s',el),c=$('#s3c',el);if(a)a.textContent=score;if(c)c.textContent=combo>1?'🔥 Perfect x'+combo:''};
+    function nextBlock(){const top=stackArr[stackArr.length-1];cur={m:mkBlock(top.x,top.z,top.w,top.d,level),x:top.x,z:top.z,w:top.w,d:top.d};t=-Math.PI/2}
+    function reset(){all.forEach(m=>scene.remove(m));all.length=0;falls.length=0;stackArr=[];
+      const base=mkBlock(0,0,3,3,0);stackArr.push({x:0,z:0,w:3,d:3,m:base});level=1;score=0;combo=0;axis='x';camY=0;nextBlock();hud()}
+    function addFall(m,vy){falls.push({m,vy:vy||0})}
+    function gameOver(){state='over';ctx.beep(150,.3);addFall(cur.m,0);cur=null;ctx.rec('play',score);const b=$('#s3b',el);if(b)b.textContent=ctx.best()??0;
+      ov.style.display='grid';ov.innerHTML=`<div><h2>Tower fell!</h2><p style="margin:8px 0">Height <b>${score}</b></p><button class="btn p" id="s3go">Play again</button></div>`}
+    function place(){if(state!=='run'||!cur)return;
+      const top=stackArr[stackArr.length-1],size=axis==='x'?top.w:top.d,tc=axis==='x'?top.x:top.z,cc=axis==='x'?cur.x:cur.z,delta=cc-tc,ad=Math.abs(delta);
+      if(ad>=size){gameOver();return}
+      let ns=size-ad,nc=tc+delta/2;
+      if(ad<.12){ns=size;nc=tc;combo++;score+=2+Math.min(combo,5);ctx.beep(900,.08)}
+      else{combo=0;score+=1;ctx.beep(500,.05);
+        const cutC=delta>0?tc+size/2+delta/2:tc-size/2+delta/2,piece=new THREE.Mesh(gBox,cur.m.material);
+        if(axis==='x'){piece.scale.set(ad,BH,top.d);piece.position.set(cutC,level*BH+BH/2,top.z)}else{piece.scale.set(top.w,BH,ad);piece.position.set(top.x,level*BH+BH/2,cutC)}
+        scene.add(piece);all.push(piece);addFall(piece,0)}
+      const nb={x:axis==='x'?nc:top.x,z:axis==='z'?nc:top.z,w:axis==='x'?ns:top.w,d:axis==='z'?ns:top.d,m:cur.m};
+      nb.m.scale.set(nb.w,BH,nb.d);nb.m.position.set(nb.x,level*BH+BH/2,nb.z);
+      stackArr.push(nb);level++;axis=axis==='x'?'z':'x';hud();nextBlock()}
+    function update(dt){
+      if(state==='run'&&cur){t+=dt*(1.9+Math.min(level,40)*.045);const top=stackArr[stackArr.length-1],p=Math.sin(t)*RANGE;
+        if(axis==='x'){cur.x=p;cur.z=top.z}else{cur.z=p;cur.x=top.x}cur.m.position.set(cur.x,level*BH+BH/2,cur.z)}
+      for(let i=falls.length-1;i>=0;i--){const f=falls[i];f.vy-=20*dt;f.m.position.y+=f.vy*dt;f.m.rotation.z+=dt*.8;if(f.m.position.y<-25){scene.remove(f.m);falls.splice(i,1)}}
+      const ty=Math.max(0,level*BH-2.5);camY+=(ty-camY)*Math.min(1,dt*3);
+      cam.position.set(7,7+camY,7);cam.lookAt(0,camY,0)}
+    function frame(ts){raf=requestAnimationFrame(frame);const dt=Math.min(.04,(ts-last)/1000||0);last=ts;update(dt);renderer.render(scene,cam)}
+    reset();
+    ov.innerHTML='<div><h2>Tower Stack 3D</h2><p style="margin:8px 0">Drop each block so it lands on the one below. Whatever hangs over is cut off!</p><button class="btn p" id="s3go">Start</button></div>';
+    el.onclick=e=>{const x=e.target.closest('button');if(!x)return;
+      if(x.id==='s3d')place();
+      else if(x.id==='s3go'){if(state!=='ready'){reset()}state='run';ov.style.display='none'}
+      x.blur()};
+    const kd=e=>{if(state!=='run')return;if(e.key===' '||e.key==='Enter'){e.preventDefault();if(!e.repeat)place()}};
+    const pd=e=>{if(state==='run'){e.preventDefault();place()}};
+    document.addEventListener('keydown',kd);wrap.addEventListener('pointerdown',pd);
+    raf=requestAnimationFrame(frame);
+    return()=>{cancelAnimationFrame(raf);document.removeEventListener('keydown',kd);wrap.removeEventListener('pointerdown',pd);el.onclick=null;
+      D.forEach(x=>{try{x.dispose()}catch(e){}});try{renderer.dispose();if(renderer.forceContextLoss)renderer.forceContextLoss()}catch(e){}}}
+  return()=>{alive=false;if(cleanFn)cleanFn()}}
+
+/* ---------- 3D live multiplayer: Orb Rush 3D + Hex Drop 3D (same 6-digit room system as Ring Out live) ---------- */
+GM.orb={name:'Orb Rush 3D',glyph:'🟡',meta:'3D orb-grabbing arena',grad:'linear-gradient(135deg,#f59e0b,#ef4444)',min:2,max:8,
+  how:'A live 3D arena. Grab as many glowing orbs as you can in 60 seconds — gold orbs are worth 1, pink orbs are worth 3. Bump rivals and use DASH to race ahead. Most orbs wins. Bots can fill empty spots.'};
+GM.hex={name:'Hex Drop 3D',glyph:'⬢',meta:'3D crumbling-floor survival',grad:'linear-gradient(135deg,#8b5cf6,#22d3ee)',min:2,max:8,
+  how:'A live 3D survival game. Every tile you stand on starts to crumble and falls away — keep moving, jump gaps and shove rivals off the edge. Last player standing wins the round. Bots can fill empty spots.'};
+const LIVE3D={orb:1,hex:1};
+const L3={};
+
+/* --- Orb Rush 3D --- */
+const orbSpawn=w=>{w.orbs.push({x:(Math.random()-.5)*20,z:(Math.random()-.5)*20,v:Math.random()<.12?3:1})};
+function orbBot(w,q,p,dt){let best=null,bd=1e9;for(const o of w.orbs){const d=Math.hypot(o.x-q.x,o.z-q.z);if(d<bd){bd=d;best=o}}
+  if(!best)return[0,0,false];p.wob=(p.wob||0)+dt;const l=bd||1;
+  return[(best.x-q.x)/l+Math.sin(p.wob*2+p.id)*.15,(best.z-q.z)/l+Math.cos(p.wob*1.7+p.id)*.15,bd>6&&Math.random()<dt*.8]}
+L3.orb={useWin:false,btn:'DASH',
+  reset(P){const w={ph:'cd',t:3,left:60,orbs:[],winner:-1,players:P.map((p,i)=>{const a=i/P.length*Math.PI*2;return{x:Math.cos(a)*7,y:0,z:Math.sin(a)*7,vx:0,vz:0,sc:0,cd:0}})};for(let i=0;i<5;i++)orbSpawn(w);return w},
+  blank(P){return{ph:'cd',t:3,left:60,orbs:[],winner:-1,players:P.map(()=>({x:undefined,y:0,z:undefined,sc:0,cd:0}))}},
+  tick(w,P,dt,ins){
+    if(w.ph==='cd'){w.t-=dt;if(w.t<=0)w.ph='play';return}
+    if(w.ph==='end'){w.t-=dt;if(w.t<=0)w.ph='over';return}
+    if(w.ph!=='play')return;
+    w.left-=dt;
+    P.forEach((p,i)=>{const q=w.players[i];let ix=0,iz=0,jr=false;
+      if(ins[i]){ix=ins[i].x;iz=ins[i].z;jr=ins[i].j}else if(!p.human){const b=orbBot(w,q,p,dt);ix=b[0];iz=b[1];jr=b[2]}
+      const l=Math.hypot(ix,iz);if(l>1){ix/=l;iz/=l}
+      q.vx+=ix*40*dt;q.vz+=iz*40*dt;q.cd=Math.max(0,q.cd-dt);
+      if(jr&&q.cd<=0&&l>.1){q.vx+=ix/l*13;q.vz+=iz/l*13;q.cd=1.2}
+      const d=Math.exp(-3*dt);q.vx*=d;q.vz*=d;const sp=Math.hypot(q.vx,q.vz);if(sp>16){q.vx*=16/sp;q.vz*=16/sp}
+      q.x+=q.vx*dt;q.z+=q.vz*dt;
+      if(q.x>11.4){q.x=11.4;q.vx*=-.5}if(q.x<-11.4){q.x=-11.4;q.vx*=-.5}if(q.z>11.4){q.z=11.4;q.vz*=-.5}if(q.z<-11.4){q.z=-11.4;q.vz*=-.5}});
+    for(let i=0;i<w.players.length;i++)for(let j=i+1;j<w.players.length;j++){const a=w.players[i],b=w.players[j],dx=b.x-a.x,dz=b.z-a.z,d=Math.hypot(dx,dz);if(d>=1.2||d===0)continue;
+      const nx=dx/d,nz=dz/d,ov=(1.2-d)/2;a.x-=nx*ov;a.z-=nz*ov;b.x+=nx*ov;b.z+=nz*ov;
+      const rv=(a.vx-b.vx)*nx+(a.vz-b.vz)*nz;if(rv>0){const imp=rv*.9+2;a.vx-=nx*imp;a.vz-=nz*imp;b.vx+=nx*imp;b.vz+=nz*imp}}
+    for(let k=w.orbs.length-1;k>=0;k--){const o=w.orbs[k];for(const q of w.players){if(Math.hypot(q.x-o.x,q.z-o.z)<1.1){q.sc+=o.v;w.orbs.splice(k,1);break}}}
+    while(w.orbs.length<5)orbSpawn(w);
+    if(w.left<=0){w.left=0;w.ph='end';w.t=3;const mx=Math.max(...w.players.map(q=>q.sc));w.winner=w.players.findIndex(q=>q.sc===mx)}},
+  pack(w){return{ph:w.ph,t:+w.t.toFixed(2),lf:+w.left.toFixed(1),w:w.winner,pl:w.players.map(q=>[+q.x.toFixed(2),+q.z.toFixed(2),q.sc,+q.cd.toFixed(1)]),o:w.orbs.map(o=>[+o.x.toFixed(2),+o.z.toFixed(2),o.v])}},
+  unpack(w,s){w.ph=s.ph;w.t=s.t;w.left=s.lf;w.winner=s.w;s.pl.forEach((a,i)=>{const q=w.players[i];if(!q)return;q.tx=a[0];q.tz=a[1];q.sc=a[2];q.cd=a[3]});w.orbs=s.o.map(a=>({x:a[0],z:a[1],v:a[2]}))},
+  final(w){return w.winner},
+  hud(w,P){return`<span class="badge">⏱ ${Math.ceil(w.left)}s</span>`+P.map((p,i)=>`<span class="badge" style="border-color:${p.col};display:inline-flex;gap:6px;align-items:center"><i style="width:10px;height:10px;border-radius:50%;background:${p.col};display:inline-block"></i>${esc(p.name)} · ${w.players[i]?w.players[i].sc:0}</span>`).join('')},
+  msg(w,P){return w.ph==='cd'?'Get ready…':w.ph==='end'&&P[w.winner]?'Time! '+esc(P[w.winner].name)+' collected the most orbs.':''},
+  build(T,scene,P,hk,asp,you){
+    scene.background=new T.Color(0x0b0d17);
+    scene.add(new T.AmbientLight(0x9aa5ff,.75));const dl=new T.DirectionalLight(0xffffff,.9);dl.position.set(6,14,8);scene.add(dl);
+    const floor=new T.Mesh(hk.geo(new T.PlaneGeometry(24,24)),hk.mat(new T.MeshStandardMaterial({color:0x151a45,roughness:.9})));floor.rotation.x=-Math.PI/2;scene.add(floor);
+    const grid=new T.GridHelper(24,12,0x3b4190,0x23286a);grid.position.y=.01;scene.add(grid);hk.d(grid.geometry);hk.d(grid.material);
+    const wm=hk.mat(new T.MeshStandardMaterial({color:0x22d3ee,emissive:0x0e7490,emissiveIntensity:.8})),wg=hk.geo(new T.BoxGeometry(1,1,1));
+    [[0,-12.2,24.8,.4],[0,12.2,24.8,.4],[-12.2,0,.4,24.8],[12.2,0,.4,24.8]].forEach(a=>{const m=new T.Mesh(wg,wm);m.scale.set(a[2],.8,a[3]);m.position.set(a[0],.4,a[1]);scene.add(m)});
+    const sg=hk.geo(new T.SphereGeometry(.6,24,16));
+    const pl=P.map(p=>{const c=new T.Color(p.col||'#888'),m=new T.Mesh(sg,hk.mat(new T.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:.35,roughness:.4})));m.visible=false;scene.add(m);return m});
+    const ring=new T.Mesh(hk.geo(new T.TorusGeometry(.9,.07,8,32)),hk.mat(new T.MeshBasicMaterial({color:0xffffff})));ring.rotation.x=Math.PI/2;ring.position.y=.06;scene.add(ring);
+    const og=hk.geo(new T.SphereGeometry(.35,16,12)),om1=hk.mat(new T.MeshStandardMaterial({color:0xfacc15,emissive:0xb45309,emissiveIntensity:.9})),om3=hk.mat(new T.MeshStandardMaterial({color:0xf43f8e,emissive:0x9d174d,emissiveIntensity:.9}));
+    const orbs=[];for(let k=0;k<14;k++){const m=new T.Mesh(og,om1);m.visible=false;scene.add(m);orbs.push(m)}
+    const cam=new T.PerspectiveCamera(50,asp,.1,100);cam.position.set(0,25,17);cam.lookAt(0,0,0);let tm=0;
+    return{cam,update(w,dt){tm+=dt;
+      w.players.forEach((q,i)=>{const m=pl[i];if(!m)return;if(q.x===undefined){m.visible=false;return}m.visible=true;m.position.set(q.x,.6,q.z);if(i===you){ring.position.x=q.x;ring.position.z=q.z}});
+      orbs.forEach((m,k)=>{const o=w.orbs[k];if(!o){m.visible=false;return}m.visible=true;m.material=o.v>1?om3:om1;m.scale.setScalar(o.v>1?1.35:1);m.position.set(o.x,.55+Math.sin(tm*3+k)*.15,o.z)})}}}};
+
+/* --- Hex Drop 3D --- */
+const HX_SP=2.2;
+const hxTile=(x,z)=>{const i=Math.round(x/HX_SP)+3,j=Math.round(z/HX_SP)+3;if(i<0||i>6||j<0||j>6)return -1;if(Math.abs(x-(i-3)*HX_SP)>1.05||Math.abs(z-(j-3)*HX_SP)>1.05)return -1;return j*7+i};
+const hxC=k=>[(k%7-3)*HX_SP,((k/7|0)-3)*HX_SP];
+function hxRound(w,P){w.ts=Array(49).fill(0);w.tt=Array(49).fill(0);const ks=shuffle([...Array(49).keys()]);
+  w.players=P.map((p,i)=>{const c=hxC(ks[i]);return{x:c[0],y:0,z:c[1],vx:0,vy:0,vz:0,alive:true,jc:0}});w.ph='cd';w.t=3;w.winner=-1}
+function hxBot(w,q,p,dt){p.bt=(p.bt||0)-dt;
+  if(p.bt<=0||p.tk===undefined||p.tk<0||w.ts[p.tk]!==0){p.bt=.9+Math.random()*.8;let best=-1,bd=1e9;
+    for(let k=0;k<49;k++){if(w.ts[k]!==0)continue;const c=hxC(k),d=Math.hypot(c[0]-q.x,c[1]-q.z)+Math.random()*3;if(d<bd){bd=d;best=k}}p.tk=best}
+  if(p.tk<0)return[0,0,false];const c=hxC(p.tk),dx=c[0]-q.x,dz=c[1]-q.z,l=Math.hypot(dx,dz)||1,ahead=hxTile(q.x+dx/l*1.6,q.z+dz/l*1.6);
+  return[dx/l,dz/l,(ahead<0||w.ts[ahead]===2)&&l>1.5&&Math.random()<dt*6]}
+L3.hex={useWin:true,btn:'JUMP',
+  reset(P,cfg){const w={ph:'cd',t:3,rd:1,win:cfg.win,wins:P.map(()=>0),winner:-1,ts:[],tt:[],players:[]};hxRound(w,P);return w},
+  blank(P){return{ph:'cd',t:3,rd:1,win:2,wins:P.map(()=>0),winner:-1,ts:Array(49).fill(0),tt:[],players:P.map(()=>({x:undefined,y:0,z:undefined,alive:true}))}},
+  tick(w,P,dt,ins){
+    if(w.ph==='cd'){w.t-=dt;if(w.t<=0)w.ph='play';return}
+    if(w.ph==='over')return;
+    const playing=w.ph==='play';
+    for(let k=0;k<49;k++)if(w.ts[k]===1){w.tt[k]-=dt;if(w.tt[k]<=0)w.ts[k]=2}
+    P.forEach((p,i)=>{const q=w.players[i];
+      if(!q.alive){q.vy-=26*dt;if(q.y>-14)q.y+=q.vy*dt;return}
+      let ix=0,iz=0,jr=false;
+      if(playing){if(ins[i]){ix=ins[i].x;iz=ins[i].z;jr=ins[i].j}else if(!p.human){const b=hxBot(w,q,p,dt);ix=b[0];iz=b[1];jr=b[2]}}
+      const l=Math.hypot(ix,iz);if(l>1){ix/=l;iz/=l}
+      q.vx+=ix*34*dt;q.vz+=iz*34*dt;const d=Math.exp(-4*dt);q.vx*=d;q.vz*=d;const sp=Math.hypot(q.vx,q.vz);if(sp>9){q.vx*=9/sp;q.vz*=9/sp}
+      q.x+=q.vx*dt;q.z+=q.vz*dt;q.jc=Math.max(0,(q.jc||0)-dt);
+      const ti=hxTile(q.x,q.z),ground=q.y<=.001&&ti>=0&&w.ts[ti]!==2;
+      if(jr&&ground&&q.jc<=0){q.vy=9;q.jc=.35}
+      q.vy-=26*dt;q.y+=q.vy*dt;
+      if(q.y<=0&&q.vy<=0&&q.y>-.6&&ti>=0&&w.ts[ti]!==2){q.y=0;q.vy=0;if(w.ts[ti]===0){w.ts[ti]=1;w.tt[ti]=.8}}
+      if(q.y<-3)q.alive=false});
+    for(let i=0;i<P.length;i++)for(let j=i+1;j<P.length;j++){const a=w.players[i],b=w.players[j];if(!a.alive||!b.alive||Math.abs(a.y-b.y)>1)continue;
+      const dx=b.x-a.x,dz=b.z-a.z,d=Math.hypot(dx,dz);if(d>=1.1||d===0)continue;const nx=dx/d,nz=dz/d,ov=(1.1-d)/2;a.x-=nx*ov;a.z-=nz*ov;b.x+=nx*ov;b.z+=nz*ov;
+      const rv=(a.vx-b.vx)*nx+(a.vz-b.vz)*nz;if(rv>0){const imp=rv*.95+3;a.vx-=nx*imp;a.vz-=nz*imp;b.vx+=nx*imp;b.vz+=nz*imp}}
+    if(playing){const al=[];P.forEach((p,i)=>{if(w.players[i].alive)al.push(i)});
+      if(al.length<=1){w.ph='end';w.t=2.8;w.winner=al.length?al[0]:-1;if(w.winner>=0)w.wins[w.winner]++}}
+    else if(w.ph==='end'){w.t-=dt;if(w.t<=0){if(w.wins.some(x=>x>=w.win))w.ph='over';else{w.rd++;hxRound(w,P)}}}},
+  pack(w){return{ph:w.ph,t:+w.t.toFixed(2),rd:w.rd,win:w.win,w:w.winner,wn:w.wins,ts:w.ts.join(''),pl:w.players.map(q=>[+q.x.toFixed(2),+q.y.toFixed(2),+q.z.toFixed(2),q.alive?1:0])}},
+  unpack(w,s){w.ph=s.ph;w.t=s.t;w.rd=s.rd;w.win=s.win;w.winner=s.w;w.wins=s.wn;w.ts=String(s.ts).split('').map(Number);
+    s.pl.forEach((a,i)=>{const q=w.players[i];if(!q)return;q.tx=a[0];q.ty=a[1];q.tz=a[2];q.alive=!!a[3]})},
+  final(w){return w.wins.indexOf(Math.max(...w.wins))},
+  hud(w,P){return`<span class="badge">Round ${w.rd} · first to ${w.win}</span>`+P.map((p,i)=>`<span class="badge" style="border-color:${p.col};display:inline-flex;gap:6px;align-items:center"><i style="width:10px;height:10px;border-radius:50%;background:${p.col};display:inline-block"></i>${esc(p.name)} · ${w.wins[i]||0}</span>`).join('')},
+  msg(w,P){return w.ph==='cd'?'Get ready…':w.ph==='end'?(P[w.winner]?esc(P[w.winner].name)+' wins the round!':'Nobody wins this round!'):''},
+  build(T,scene,P,hk,asp,you){
+    scene.background=new T.Color(0x0b0d17);scene.fog=new T.Fog(0x0b0d17,24,60);
+    scene.add(new T.AmbientLight(0x9aa5ff,.75));const dl=new T.DirectionalLight(0xffffff,.9);dl.position.set(6,14,8);scene.add(dl);
+    const bg=hk.geo(new T.BoxGeometry(2,.6,2)),mA=hk.mat(new T.MeshStandardMaterial({color:0x5b4bd6,roughness:.6})),mB=hk.mat(new T.MeshStandardMaterial({color:0x7c6fe8,roughness:.6})),mC=hk.mat(new T.MeshStandardMaterial({color:0xf97316,emissive:0x9a3412,emissiveIntensity:.8}));
+    const base=k=>(((k%7)+(k/7|0))%2)?mA:mB,tiles=[],fall=[];
+    for(let k=0;k<49;k++){const c=hxC(k),m=new T.Mesh(bg,base(k));m.position.set(c[0],-.3,c[1]);scene.add(m);tiles.push(m);fall.push(0)}
+    const sg=hk.geo(new T.SphereGeometry(.55,24,16));
+    const pl=P.map(p=>{const c=new T.Color(p.col||'#888'),m=new T.Mesh(sg,hk.mat(new T.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:.35,roughness:.4})));m.visible=false;scene.add(m);return m});
+    const ring=new T.Mesh(hk.geo(new T.TorusGeometry(.85,.07,8,32)),hk.mat(new T.MeshBasicMaterial({color:0xffffff})));ring.rotation.x=Math.PI/2;scene.add(ring);
+    const cam=new T.PerspectiveCamera(50,asp,.1,100);cam.position.set(0,17,13);cam.lookAt(0,-1,0);let tm=0;
+    return{cam,update(w,dt){tm+=dt;
+      tiles.forEach((m,k)=>{const s=w.ts[k];if(s===2){fall[k]-=dt*9;m.position.y=-.3+fall[k];m.visible=fall[k]>-14}else{fall[k]=0;m.visible=true;m.position.y=-.3+(s===1?Math.sin(tm*45+k)*.04:0);m.material=s===1?mC:base(k)}});
+      w.players.forEach((q,i)=>{const m=pl[i];if(!m)return;if(q.x===undefined||q.y<-14){m.visible=false;return}m.visible=true;m.position.set(q.x,q.y+.55,q.z);if(i===you){ring.position.set(q.x,q.y+.05,q.z)}})}}}};
+
+/* --- shared live engine for the 3D games (lobby, host simulation, snapshots, guest rendering) --- */
+function liveNet(o,gm,first){
+  const host=!!o.host,code=o.code||'',G=L3[gm],GMeta=GM[gm];
+  const COLORS=['#f43f8e','#22d3ee','#a3e635','#f59e0b','#8b5cf6','#ef4444','#38bdf8','#fb7185'];
+  const touch=(window.matchMedia&&matchMedia('(pointer:coarse)').matches)||'ontouchstart' in window;
+  const hi=o.hostInfo||{name:'Host',av:'🎮'};
+  let P=host?[{id:0,name:pname(),av:S.avatar,human:true,local:true,on:true}]:[{id:0,name:hi.name,av:hi.av,human:true,on:true}];
+  let state='lobby',world=null,R=null,renderer=null,scene=null,W=360,Hh=400,D=[],alive=true,raf=0,last=0,lastSend=0,you=host?0:-1,dead=false,counted=false,shown=false,lastIn='',sentAt=0,hudKey='',msgKey='',hiAt=0,lt=0;
+  const cfg={bots:2,win:2},joy={x:0,y:0},down={};
+  const send=(l,m)=>{try{l.send(m)}catch(e){}};
+  main.innerHTML=`<div class="gh"><button class="btn" data-mp="lobby">← Leave</button><div class="sp"><h2>${esc(GMeta.name)}</h2><span class="badge">${host?'Hosting':'Joined'}</span></div></div>
+  <div class="stage" style="max-width:560px"><div id="ln-lobby"></div><div id="ln-game" hidden>
+  <div id="ln-hud" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center"></div>
+  <div id="ln-w" style="position:relative;max-width:520px;margin:0 auto;width:100%"><p class="msg">Loading 3D…</p></div><p class="msg" id="ln-msg" role="status"></p>
+  ${touch?`<div class="ro-ctl"><div id="ro-joy"><i id="ro-nub"></i></div><button class="btn p" id="ro-dash">${G.btn}</button></div>`:'<p class="muted" style="text-align:center">Move: WASD / arrows · '+G.btn+': Space</p>'}</div></div>`;
+
+  function renderLobby(){const b=$('#ln-lobby');if(!b)return;
+    const pl=P.map((p,i)=>`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:22px">${p.av}</span><b>${esc(p.name)}</b><span class="muted">${i===0?'host':''}${i===you?' · you':''}</span><span style="width:9px;height:9px;border-radius:50%;display:inline-block;background:${p.on===false?'#ef4444':'#22c55e'}"></span></div>`).join('');
+    b.innerHTML=`<div class="card pad"><div class="ctl"><div><span class="muted">Room code</span><div style="font-size:${code?34:20}px;font-weight:900;letter-spacing:.2em">${code?esc(code):'Manual codes'}</div></div>${host&&code?'<button class="btn" data-ln="copy">Copy code</button>':''}</div>
+    ${host&&!code?'<p class="msg" style="color:#f59e0b;text-align:left;margin-top:8px">No 6-digit code could be created in this view. Use ➕ Add a player (manual code) below, or host this website on a normal web host.</p>':''}
+    <p class="muted" style="margin:8px 0">${GMeta.how}</p><b>Players (${P.length}/8)</b><div style="display:grid;gap:8px;margin-top:8px">${pl}</div>
+    ${host?`<div class="ctl" style="margin-top:12px"><label>Bots <select id="ln-b">${roOpt([0,1,2,3,4,5,6,7],cfg.bots)}</select></label>${G.useWin?`<label>First to <select id="ln-w2">${roOpt([1,2,3],cfg.win)}</select></label>`:''}</div><div class="row" style="padding-top:12px"><button class="btn p" data-ln="start">Start match</button><button class="btn" data-ln="add">➕ Add a player (manual code)</button></div>`:'<p class="msg">Waiting for the host to start…</p>'}</div>`}
+  function showGame(){const l=$('#ln-lobby'),g=$('#ln-game');if(l)l.hidden=true;if(g)g.hidden=false;hudKey='';msgKey=''}
+  function wireTouch(){if(!touch)return;const j=$('#ro-joy'),n=$('#ro-nub');if(!j)return;let act=false;
+    const mv=e=>{const r=j.getBoundingClientRect();let dx=(e.clientX-(r.left+r.width/2))/55,dy=(e.clientY-(r.top+r.height/2))/55;const l=Math.hypot(dx,dy);if(l>1){dx/=l;dy/=l}joy.x=dx;joy.y=dy;n.style.left=(45+dx*45)+'px';n.style.top=(45+dy*45)+'px'};
+    const up=()=>{act=false;joy.x=joy.y=0;n.style.left='45px';n.style.top='45px'};
+    j.addEventListener('pointerdown',e=>{act=true;try{j.setPointerCapture(e.pointerId)}catch(er){}mv(e)});
+    j.addEventListener('pointermove',e=>{if(act)mv(e)});j.addEventListener('pointerup',up);j.addEventListener('pointercancel',up);
+    const d=$('#ro-dash');if(d)d.addEventListener('pointerdown',e=>{e.preventDefault();jumpNow()})}
+  function jumpNow(){if(host){if(P[0])P[0].jumpReq=true}else if(!dead)send(o.link,{t:'j'})}
+  function localVec(){let ix=0,iz=0;if(down.a||down.ArrowLeft)ix--;if(down.d||down.ArrowRight)ix++;if(down.w||down.ArrowUp)iz--;if(down.s||down.ArrowDown)iz++;if(touch){ix+=joy.x;iz+=joy.y}
+    const l=Math.hypot(ix,iz);if(l>1){ix/=l;iz/=l}return[ix,iz]}
+  function sendIn(){if(host||dead||state!=='play')return;const v=localVec(),key=v[0].toFixed(2)+','+v[1].toFixed(2),now=performance.now();
+    if(key!==lastIn||now-sentAt>300){lastIn=key;sentAt=now;send(o.link,{t:'in',x:+v[0].toFixed(2),y:+v[1].toFixed(2)})}}
+
+  /* ----- 3D scene ----- */
+  function disposeScene(){D.forEach(x=>{try{x.dispose()}catch(e){}});D=[]}
+  function build(){
+    const wrap=$('#ln-w');
+    if(!renderer){const kit=threeSetup(wrap,1.1);if(!kit){wrap.innerHTML='<p class="msg">3D graphics (WebGL) are not available on this device.</p>';return false}renderer=kit.r;W=kit.W;Hh=kit.H}
+    disposeScene();scene=new THREE.Scene();
+    const hk={geo:g=>{D.push(g);return g},mat:m=>{D.push(m);return m},d:x=>{D.push(x);return x}};
+    R=G.build(THREE,scene,P,hk,W/Hh,you);return true}
+  function launch(){showGame();state='loading';const msg=$('#ln-msg');if(msg)msg.textContent='Loading 3D…';
+    loadThree().then(ok=>{if(!alive)return;if(!ok){if(msg)msg.textContent='Could not load the 3D engine. Check your connection.';return}
+      if(!build())return;if(msg)msg.textContent='';shown=false;counted=false;state='play'})}
+
+  /* ----- host ----- */
+  function sendLobby(){P.forEach(p=>{if(p.remote&&p.on!==false)send(p.link,{t:'lobby',gm,ps:P.map(q=>({n:q.name,a:q.av,on:q.on!==false})),you:p.id,win:cfg.win})})}
+  function sendStart(p){send(p.link,{t:'start',gm,ps:P.map(q=>({n:q.name,a:q.av,h:q.human})),you:p.id,win:cfg.win})}
+  function addLink(conn,info){if(!alive)return;
+    if(state!=='lobby'||P.length>=8){send(conn,{t:'full'});setTimeout(()=>conn.close(),300);return}
+    const p={id:P.length,name:info.name,av:info.av,human:true,remote:true,on:true,link:conn,inp:{x:0,y:0},jumpReq:false};P.push(p);
+    conn.on('data',m=>{if(!m||typeof m!=='object')return;
+      if(m.t==='in'){const x=+m.x,y=+m.y;if(Number.isFinite(x)&&Number.isFinite(y)){p.inp.x=Math.max(-1,Math.min(1,x));p.inp.y=Math.max(-1,Math.min(1,y))}}
+      else if(m.t==='j')p.jumpReq=true;
+      else if(m.t==='hi'){if(state==='lobby')sendLobby();else sendStart(p)}});
+    conn.on('close',()=>{p.on=false;p.inp={x:0,y:0};if(state==='lobby')renderLobby()});
+    sendLobby();renderLobby();beep(600,.08)}
+  function startMatch(){
+    const humans=P.filter(p=>p.on!==false),nb=Math.min(cfg.bots,8-humans.length);
+    if(humans.length+nb<2)return toast('Need at least 2 players — add bots or friends.');
+    P=humans;for(let i=0;i<nb;i++)P.push({name:'Bot '+(i+1),av:'🤖',human:false,skill:.5+Math.random()*.5,on:true});
+    P.forEach((p,i)=>{p.id=i;p.col=COLORS[i]});
+    P.forEach(p=>{if(p.remote)sendStart(p)});
+    world=G.reset(P,cfg);launch()}
+  function snapAll(){const m={t:'s',g:G.pack(world)};P.forEach(p=>{if(p.remote&&p.on!==false)send(p.link,m)})}
+
+  /* ----- guest ----- */
+  function onMsg(m){if(!alive||!m||typeof m!=='object')return;
+    if(m.t==='lobby'||m.t==='start'){const ps=Array.isArray(m.ps)?m.ps.slice(0,8):[];
+      P=ps.map((q,i)=>({id:i,name:cleanP({name:q&&q.n}).name,av:cleanP({av:q&&q.a}).av,human:m.t==='start'?!!(q&&q.h):true,on:!(q&&q.on===false),col:COLORS[i]}));
+      you=Number.isInteger(m.you)?m.you:0;cfg.win=+m.win||2;
+      if(m.t==='start'){world=G.blank(P);if(G.useWin)world.win=cfg.win;launch()}else{state='lobby';renderLobby()}}
+    else if(m.t==='s'){if(state!=='play'||!world)return;const g=m.g;
+      if(!g||!Array.isArray(g.pl)||g.pl.length!==P.length){if(performance.now()-hiAt>1000){hiAt=performance.now();send(o.link,{t:'hi'})}return}
+      try{G.unpack(world,g)}catch(e){}}
+    else if(m.t==='full'){alive=false;cancelAnimationFrame(raf);main.innerHTML=dShell(GMeta.name,'<p class="msg">This room is full or the match has already started.</p>')}}
+
+  /* ----- loop ----- */
+  function hudUpdate(){const h=G.hud(world,P);if(h!==hudKey){hudKey=h;const e=$('#ln-hud');if(e)e.innerHTML=h}
+    if(world.ph!=='over'){const mm=G.msg(world,P)||'';if(mm!==msgKey){msgKey=mm;const e=$('#ln-msg');if(e)e.innerHTML=mm}}}
+  function overUI(){const w=G.final(world),e=$('#ln-msg');if(!e||!P[w])return;
+    e.innerHTML=`🏆 ${esc(P[w].name)} wins!${host?' <button class="btn p" data-ln="again">Play again</button>':' Waiting for the host…'}`;
+    if(!counted){counted=true;const mm=S.mp||(S.mp={w:0,l:0,d:0});if(w===you)mm.w++;else mm.l++;save()}}
+  function frame(ts){raf=requestAnimationFrame(frame);const dt=Math.min(.04,(ts-last)/1000||0);last=ts;
+    if(state!=='play'||!R||!world)return;
+    if(host){const lv=localVec(),ins=P.map(p=>{if(p.local){const j=!!p.jumpReq;p.jumpReq=false;return{x:lv[0],z:lv[1],j}}
+        if(p.remote){const j=!!p.jumpReq;p.jumpReq=false;return{x:p.inp.x,z:p.inp.y,j}}return null});
+      G.tick(world,P,dt,ins);if(ts-lastSend>=50){lastSend=ts;snapAll()}}
+    else{const k=Math.min(1,dt*18);
+      for(const q of world.players){if(q.tx===undefined)continue;
+        if(q.x===undefined){q.x=q.tx;q.z=q.tz;if(q.ty!==undefined)q.y=q.ty}
+        else{const dx=q.tx-q.x,dz=q.tz-q.z;if(dx*dx+dz*dz>25){q.x=q.tx;q.z=q.tz}else{q.x+=dx*k;q.z+=dz*k}if(q.ty!==undefined)q.y+=(q.ty-q.y)*k}}
+      sendIn()}
+    R.update(world,dt);renderer.render(scene,R.cam);hudUpdate();
+    if(world.ph==='over'&&!shown){shown=true;overUI()}else if(world.ph!=='over'&&shown){shown=false;counted=false;msgKey='';const e=$('#ln-msg');if(e)e.innerHTML=''}}
+
+  /* ----- input & wiring ----- */
+  const norm=e=>e.key.length===1?e.key.toLowerCase():e.key;
+  const kd=e=>{if(!alive||state!=='play')return;if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT')return;const k=norm(e);
+    if(['w','a','s','d','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(k)){down[k]=true;e.preventDefault()}
+    else if(k===' '||k==='Enter'){e.preventDefault();if(!e.repeat)jumpNow()}};
+  const ku=e=>{delete down[norm(e)]};
+  document.addEventListener('keydown',kd);document.addEventListener('keyup',ku);
+  const h=e=>{if(main.onclick!==h)return;const x=e.target.closest('[data-mp],[data-ln]');if(!x)return;
+    if(x.dataset.mp==='lobby')return go('multiplayer');
+    const a=x.dataset.ln;if(a==='copy')return copyText(code);if(!alive)return;
+    if((a==='start'||a==='again')&&host)startMatch();else if(a==='add'&&host&&o.manualAdd)o.manualAdd(addLink)};
+  main.onclick=h;main.oninput=main.onkeydown=null;
+  main.onchange=e=>{if(e.target.id==='ln-b')cfg.bots=+e.target.value;if(e.target.id==='ln-w2'){cfg.win=+e.target.value;if(host)sendLobby()}};
+  cleanup=()=>{if(!alive)return;alive=false;cancelAnimationFrame(raf);clearInterval(lt);main.onclick=main.onchange=null;
+    document.removeEventListener('keydown',kd);document.removeEventListener('keyup',ku);rtCloseAdd();
+    if(host){if(o.sig)o.sig.stop();P.forEach(p=>{if(p.remote){try{p.link.close()}catch(e){}}})}else{try{o.link.close()}catch(e){}}
+    try{o.pc&&o.pc.close()}catch(e){}
+    disposeScene();try{if(renderer){renderer.dispose();if(renderer.forceContextLoss)renderer.forceContextLoss()}}catch(e){}};
+  renderLobby();wireTouch();window.scrollTo(0,0);
+  if(host){o.addLink=addLink;lt=setInterval(()=>{if(state==='lobby')sendLobby()},2000)}
+  else{o.link.on('data',onMsg);o.link.on('close',()=>{if(alive){dead=true;const e=$('#ln-msg');if(e)e.textContent='Connection lost.';if(state==='lobby'){const b=$('#ln-lobby');if(b)b.innerHTML='<div class="card pad empty"><h3>Connection lost</h3><p>Go back and join again.</p></div>'}}});
+    if(first)onMsg(first);send(o.link,{t:'hi'})}
+  raf=requestAnimationFrame(frame)}
+
+/* ---------- hook the 3D games into the existing room flow (wrappers keep the old behaviour for other games) ---------- */
+ringNet=(function(orig){return function(o){
+  if(o.host){const gm=window.__liveGm;window.__liveGm=null;if(gm&&LIVE3D[gm])return liveNet(o,gm,null);return orig(o)}
+  let done=false;const link=o.link;
+  main.innerHTML=dShell('Joining…','<p class="msg">Connecting to the room…</p>');
+  main.onclick=e=>{if(e.target.closest('[data-mp="lobby"]'))go('multiplayer')};
+  cleanup=()=>{done=true;main.onclick=null;try{link.close()}catch(e){}try{o.pc&&o.pc.close()}catch(e){}};
+  link.on('data',m=>{if(done||!m||typeof m!=='object')return;
+    if(m.t==='lobby'||m.t==='start'){done=true;if(m.gm&&LIVE3D[m.gm])liveNet(o,m.gm,m);else orig(o)}});
+  try{link.send({t:'hi'})}catch(e){}}})(ringNet);
+mpCreate=(function(orig){return function(gk,say){
+  if(LIVE3D[gk]){window.__liveGm=gk;gk='ringout'}else if(gk==='ringout')window.__liveGm=null;
+  return orig(gk,say)}})(mpCreate);
+mpGroupHostManual=(function(orig){return function(gk){
+  if(LIVE3D[gk]){window.__liveGm=gk;return rtCreate(()=>{})}
+  return orig(gk)}})(mpGroupHostManual);
+
+setTimeout(()=>{
+  INFO.About=`${BRAND} is a browser game hub with solo games (Snake, Battleship, Neon Runner 3D, Tower Stack 3D and more), two-player online games (Connect Four, Checkers), and live multiplayer games for up to 8 players (Ring Out, Orb Rush 3D, Hex Drop 3D, Odd One Out and more). Rooms use a 6-digit code.`;
+  INFO.FAQ='Do I need an account? No. Can more than two people play? Yes — Ring Out, Orb Rush 3D, Hex Drop 3D and the party games support up to 8 players, each on their own device, using a 6-digit room code. Codes work when this website is hosted on a normal web host; some app previews block the connection service. Where is my progress saved? In this browser only.'},0);
+
 /* ---------- registry (add new games here) ---------- */
 const GAMES=[
  {id:'ttt',title:'Tic-Tac-Toe',cat:'Board',mode:'Solo vs AI',added:5,quick:1,glyph:'✕ ○',grad:'linear-gradient(135deg,#7c3aed,#22d3ee)',goal:'Win a round against the AI',how:'Get three in a row. You are X. On Hard the AI never loses, so a draw is a great result.',mount:ttt},
@@ -2262,9 +2670,13 @@ const GAMES=[
  {id:'checkers',title:'Checkers',cat:'Board',mode:'Solo vs AI',added:15,quick:0,glyph:'●○',grad:'linear-gradient(135deg,#f43f8e,#65a30d)',goal:'Beat the computer',how:'Move diagonally on the dark squares. Captures are mandatory and multi-jumps continue with the same piece. Reach the far row to become a king. You play pink. Also playable with a friend in Multiplayer.',mount:checkersGame},
  {id:'sudoku',title:'Sudoku',cat:'Puzzle',mode:'Solo',added:14,quick:0,glyph:'9',grad:'linear-gradient(135deg,#0ea5e9,#8b5cf6)',goal:'Solve a puzzle',how:'Fill every row, column and 3×3 box with 1–9 without repeats. Every puzzle has exactly one solution. Conflicts turn red, and you can use Check or Hints (−100 points each). Keyboard digits and arrows work too.',mount:sudoku},
  {id:'battle',title:'Battleship',cat:'Board',mode:'Solo vs AI',added:13,quick:0,glyph:'🚢',grad:'linear-gradient(135deg,#0c4a6e,#22d3ee)',goal:'Sink the enemy fleet',how:'Your five ships are placed at random (shuffle until you like it). Take turns firing at the 10×10 grid — the computer hunts smartly once it scores a hit. Sink all five enemy ships first to win. Fewer shots means a higher score.',mount:battle},
- {id:'ringout',title:'Ring Out',cat:'Arcade',mode:'Solo vs AI',added:17,quick:0,glyph:'🥊',grad:'linear-gradient(135deg,#f43f8e,#8b5cf6,#22d3ee)',goal:'Win a match',how:'A couch-style party brawler: shove rivals off a platform that keeps shrinking — last fighter standing wins the round. Play alone against bots, or with up to 3 friends on one keyboard (P1: WASD + Space, P2: arrows + Enter, P3: IJKL + U). On a phone, use the joystick and the DASH button.',mount:ringout}];
+ {id:'ringout',title:'Ring Out',cat:'Arcade',mode:'Solo vs AI',added:17,quick:0,glyph:'🥊',grad:'linear-gradient(135deg,#f43f8e,#8b5cf6,#22d3ee)',goal:'Win a match',how:'A couch-style party brawler: shove rivals off a platform that keeps shrinking — last fighter standing wins the round. Play alone against bots, or with up to 3 friends on one keyboard (P1: WASD + Space, P2: arrows + Enter, P3: IJKL + U). On a phone, use the joystick and the DASH button.',mount:ringout},
+ {id:'runner3d',title:'Neon Runner 3D',cat:'Arcade',mode:'Solo',added:19,quick:0,td:1,glyph:'🏃',grad:'linear-gradient(135deg,#0ea5e9,#f43f8e)',goal:'Score 500+',how:'A 3D endless runner. Switch between three lanes, jump over the red barriers, dodge the tall purple blocks and collect coins. Use ← → / A D to change lane and ↑ / W / Space to jump, swipe on the screen, or use the buttons. The game speeds up the longer you survive.',mount:runner3d},
+ {id:'stack3d',title:'Tower Stack 3D',cat:'Arcade',mode:'Solo',added:18,quick:1,td:1,glyph:'🗼',grad:'linear-gradient(135deg,#f59e0b,#8b5cf6)',goal:'Stack 15 blocks',how:'Build the tallest 3D tower you can. A block slides back and forth — tap the screen, press Space or use the Drop button to place it. Any part that hangs over is cut off, so the tower gets thinner. Land it almost exactly for a Perfect bonus!',mount:stack3d}];
 for(const id of ['ttt','rps','mem','pulse','lights','sudoku']){const i=GAMES.findIndex(g=>g.id===id);if(i>=0)GAMES.splice(i,1)}
-delete MP.ttt;delete MP.rps;
+delete MP.ttt;delete MP.rps;delete MP.chess;delete GM.quiz;
+for(const id of ['mines','clash','g2048','chess']){const i=GAMES.findIndex(g=>g.id===id);if(i>=0)GAMES.splice(i,1)}
+{const i=ACH.findIndex(a=>a[1]==='Tile Master');if(i>=0)ACH.splice(i,1)}
 {const i=ACH.findIndex(a=>a[1]==='Sharp Memory');if(i>=0)ACH.splice(i,1)}
 const PLANNED=['Quiz Battle','Trivia Challenge','Word Guessing Game'];
 const byId=id=>GAMES.find(g=>g.id===id);
@@ -2298,7 +2710,8 @@ function home(){const f=dailyGame(),rec=S.recent.map(byId).filter(Boolean);
  ${rec.length?sec('Recently Played','',`<div class="grid">${rec.slice(0,4).map(card).join('')}</div>`):''}
  ${sec('Multiplayer Games','Two players · online rooms or one device',`<div class="grid">${Object.keys(MP).map(k=>mpCard(k,'Play with a friend','data-nav="multiplayer"')).join('')+Object.keys(GM).map(k=>gmCard(k,'Play with friends','data-nav="multiplayer"')).join('')}</div>`)}
  ${sec('Quick Games','Under three minutes',`<div class="grid">${GAMES.filter(g=>g.quick).map(card).join('')}</div>`)}
- ${sec('Puzzle & Brain Games','',`<div class="grid">${GAMES.filter(g=>g.cat==='Puzzle').map(card).join('')}</div>`)}
+ ${sec('Strategy & Board Games','',`<div class="grid">${GAMES.filter(g=>g.cat==='Board').map(card).join('')}</div>`)}
+ ${sec('3D Games','Real 3D graphics, right in your browser',`<div class="grid">${GAMES.filter(g=>g.td).map(card).join('')}</div>`)}
  ${sec('Arcade','',`<div class="grid">${GAMES.filter(g=>g.cat==='Arcade').map(card).join('')}</div>`)}
  <section><div class="card pad"><span class="badge">Daily Challenge · ${today()}</span><h2 style="margin:10px 0 4px">${f.title}: ${f.goal}</h2><p class="muted">${S.daily.date===today()&&S.daily.done?'✅ Completed today — come back tomorrow for a new one.':'Finish one round today to complete it.'}</p><div class="row"><button class="btn p" data-play="${f.id}">Take the challenge</button></div></div></section>
  ${sec('On the roadmap','Not playable yet — these are planned, not available.',`<div class="chips">${PLANNED.map(p=>`<span class="chip" style="opacity:.7">${p}</span>`).join('')}</div>`)}`}
