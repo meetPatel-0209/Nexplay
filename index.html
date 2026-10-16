@@ -2652,6 +2652,77 @@ setTimeout(()=>{
   INFO.About=`${BRAND} is a browser game hub with solo games (Snake, Battleship, Neon Runner 3D, Tower Stack 3D and more), two-player online games (Connect Four, Checkers), and live multiplayer games for up to 8 players (Ring Out, Orb Rush 3D, Hex Drop 3D, Odd One Out and more). Rooms use a 6-digit code.`;
   INFO.FAQ='Do I need an account? No. Can more than two people play? Yes — Ring Out, Orb Rush 3D, Hex Drop 3D and the party games support up to 8 players, each on their own device, using a 6-digit room code. Codes work when this website is hosted on a normal web host; some app previews block the connection service. Where is my progress saved? In this browser only.'},0);
 
+/* ---------- Rift Clash 6D: gravity-flip shard arena (six layers of play) ---------- */
+GM.rift={name:'Rift Clash 6D',glyph:'🌀',meta:'Flip gravity, race the clock',grad:'linear-gradient(135deg,#06b6d4,#a855f7,#f43f8e)',min:2,max:8,
+  how:'Six layers of play in one 3D arena: left-right and forward-back movement, up-down via gravity FLIP (floor ↔ ceiling), two worlds (only players on the same surface can bump), time (shards pulse bright and dim — only bright ones can be grabbed) and Rift Storms that flip everyone\'s gravity. Grab the most shards in 75 seconds. Bots can fill empty spots.'};
+LIVE3D.rift=1;
+const RF_C=8,RF_H=9.5,rfCy=q=>q.y+.6-1.2*q.y/RF_C;
+const rfSpawn=w=>{w.orbs.push({x:(Math.random()-.5)*2*(RF_H-1.2),y:.8+Math.random()*(RF_C-1.6),z:(Math.random()-.5)*2*(RF_H-1.2),v:Math.random()<.15?3:1,age:0})};
+function rfBot(w,q,p,dt){let best=null,bd=1e9;const cy=rfCy(q);
+  for(const o of w.orbs){if((o.age%6)>=4)continue;const d=Math.hypot(o.x-q.x,o.y-cy,o.z-q.z);if(d<bd){bd=d;best=o}}
+  if(!best)return[0,0,false];p.wob=(p.wob||0)+dt;
+  const dx=best.x-q.x,dz=best.z-q.z,l=Math.hypot(dx,dz)||1,cur=q.g>0?0:RF_C,other=RF_C-cur;
+  const flip=q.cd<=0&&Math.abs(best.y-other)<Math.abs(best.y-cur)-.8&&Math.random()<dt*3;
+  return[dx/l+Math.sin(p.wob*2+p.id)*.15,dz/l+Math.cos(p.wob*1.6+p.id)*.15,flip]}
+L3.rift={useWin:false,btn:'FLIP',
+  reset(P){const w={ph:'cd',t:3,left:75,orbs:[],winner:-1,storm:0,sn:0,players:P.map((p,i)=>{const a=i/P.length*Math.PI*2;return{x:Math.cos(a)*6,y:0,z:Math.sin(a)*6,vx:0,vy:0,vz:0,g:1,sc:0,cd:0}})};for(let i=0;i<7;i++)rfSpawn(w);return w},
+  blank(P){return{ph:'cd',t:3,left:75,orbs:[],winner:-1,storm:0,sn:0,players:P.map(()=>({x:undefined,y:0,z:undefined,g:1,sc:0,cd:0}))}},
+  tick(w,P,dt,ins){
+    if(w.ph==='cd'){w.t-=dt;if(w.t<=0)w.ph='play';return}
+    if(w.ph==='end'){w.t-=dt;if(w.t<=0)w.ph='over';return}
+    if(w.ph!=='play')return;
+    w.left-=dt;w.storm=Math.max(0,w.storm-dt);
+    if((w.sn===0&&w.left<50)||(w.sn===1&&w.left<25)){w.sn++;w.storm=2.5;w.players.forEach(q=>{q.g=-q.g})}
+    P.forEach((p,i)=>{const q=w.players[i];let ix=0,iz=0,fl=false;
+      if(ins[i]){ix=ins[i].x;iz=ins[i].z;fl=ins[i].j}else if(!p.human){const b=rfBot(w,q,p,dt);ix=b[0];iz=b[1];fl=b[2]}
+      const l=Math.hypot(ix,iz);if(l>1){ix/=l;iz/=l}
+      q.vx+=ix*36*dt;q.vz+=iz*36*dt;q.cd=Math.max(0,q.cd-dt);
+      if(fl&&q.cd<=0){q.g=-q.g;q.cd=.9}
+      const d=Math.exp(-2.6*dt);q.vx*=d;q.vz*=d;const sp=Math.hypot(q.vx,q.vz);if(sp>13){q.vx*=13/sp;q.vz*=13/sp}
+      q.vy+=-q.g*24*dt;q.y+=q.vy*dt;q.x+=q.vx*dt;q.z+=q.vz*dt;
+      if(q.x>RF_H){q.x=RF_H;q.vx*=-.5}if(q.x<-RF_H){q.x=-RF_H;q.vx*=-.5}if(q.z>RF_H){q.z=RF_H;q.vz*=-.5}if(q.z<-RF_H){q.z=-RF_H;q.vz*=-.5}
+      if(q.y<0){q.y=0;if(q.vy<0)q.vy=0}if(q.y>RF_C){q.y=RF_C;if(q.vy>0)q.vy=0}});
+    for(let i=0;i<w.players.length;i++)for(let j=i+1;j<w.players.length;j++){const a=w.players[i],b=w.players[j],dx=b.x-a.x,dy=rfCy(b)-rfCy(a),dz=b.z-a.z,d=Math.hypot(dx,dy,dz);if(d>=1.2||d===0)continue;
+      const nx=dx/d,ny=dy/d,nz=dz/d,ov=(1.2-d)/2;a.x-=nx*ov;a.z-=nz*ov;b.x+=nx*ov;b.z+=nz*ov;a.y-=ny*ov;b.y+=ny*ov;
+      const rv=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny+(a.vz-b.vz)*nz;if(rv>0){const imp=rv*.9+2;a.vx-=nx*imp;a.vy-=ny*imp;a.vz-=nz*imp;b.vx+=nx*imp;b.vy+=ny*imp;b.vz+=nz*imp}}
+    w.players.forEach(q=>{if(q.y<0){q.y=0;if(q.vy<0)q.vy=0}if(q.y>RF_C){q.y=RF_C;if(q.vy>0)q.vy=0}});
+    for(let k=w.orbs.length-1;k>=0;k--){const o=w.orbs[k];o.age+=dt;
+      if(o.age>14){w.orbs.splice(k,1);continue}
+      if((o.age%6)<4){for(const q of w.players){if(Math.hypot(q.x-o.x,rfCy(q)-o.y,q.z-o.z)<1.15){q.sc+=o.v;w.orbs.splice(k,1);break}}}}
+    while(w.orbs.length<7)rfSpawn(w);
+    if(w.left<=0){w.left=0;w.ph='end';w.t=3;const mx=Math.max(...w.players.map(q=>q.sc));w.winner=w.players.findIndex(q=>q.sc===mx)}},
+  pack(w){return{ph:w.ph,t:+w.t.toFixed(2),lf:+w.left.toFixed(1),st:+w.storm.toFixed(1),w:w.winner,
+    pl:w.players.map(q=>[+q.x.toFixed(2),+q.y.toFixed(2),+q.z.toFixed(2),q.g,q.sc,+q.cd.toFixed(1)]),o:w.orbs.map(o=>[+o.x.toFixed(2),+o.y.toFixed(2),+o.z.toFixed(2),o.v,+o.age.toFixed(1)])}},
+  unpack(w,s){w.ph=s.ph;w.t=s.t;w.left=s.lf;w.storm=s.st;w.winner=s.w;
+    s.pl.forEach((a,i)=>{const q=w.players[i];if(!q)return;q.tx=a[0];q.ty=a[1];q.tz=a[2];q.g=a[3];q.sc=a[4];q.cd=a[5]});
+    w.orbs=s.o.map(a=>({x:a[0],y:a[1],z:a[2],v:a[3],age:a[4]}))},
+  final(w){return w.winner},
+  hud(w,P){return`<span class="badge">⏱ ${Math.ceil(w.left)}s</span>${w.storm>0?'<span class="badge" style="border-color:#f43f8e;color:#f43f8e">⚠ RIFT STORM</span>':''}`+P.map((p,i)=>`<span class="badge" style="border-color:${p.col};display:inline-flex;gap:6px;align-items:center"><i style="width:10px;height:10px;border-radius:50%;background:${p.col};display:inline-block"></i>${esc(p.name)} · ${w.players[i]?w.players[i].sc:0}</span>`).join('')},
+  msg(w,P){return w.ph==='cd'?'Get ready… tap FLIP to switch between floor and ceiling':w.ph==='end'&&P[w.winner]?'Time! '+esc(P[w.winner].name)+' grabbed the most shards.':''},
+  build(T,scene,P,hk,asp,you){
+    scene.background=new T.Color(0x070816);scene.fog=new T.Fog(0x070816,34,80);
+    scene.add(new T.AmbientLight(0x8890ff,.65));
+    const l1=new T.PointLight(0x22d3ee,.9,40);l1.position.set(0,2,0);scene.add(l1);const l2=new T.PointLight(0xf43f8e,.9,40);l2.position.set(0,RF_C-2,0);scene.add(l2);
+    const pg=hk.geo(new T.PlaneGeometry(2*RF_H,2*RF_H));
+    const floor=new T.Mesh(pg,hk.mat(new T.MeshStandardMaterial({color:0x151a45,roughness:.9})));floor.rotation.x=-Math.PI/2;scene.add(floor);
+    const ceil=new T.Mesh(pg,hk.mat(new T.MeshStandardMaterial({color:0x2a1245,roughness:.9,transparent:true,opacity:.55,side:T.DoubleSide})));ceil.rotation.x=Math.PI/2;ceil.position.y=RF_C;scene.add(ceil);
+    const g1=new T.GridHelper(2*RF_H,10,0x22d3ee,0x23286a);g1.position.y=.02;scene.add(g1);hk.d(g1.geometry);hk.d(g1.material);
+    const g2=new T.GridHelper(2*RF_H,10,0xf43f8e,0x4a1d5e);g2.position.y=RF_C-.02;scene.add(g2);hk.d(g2.geometry);hk.d(g2.material);
+    const bx=hk.geo(new T.BoxGeometry(1,1,1)),em=hk.mat(new T.MeshBasicMaterial({color:0x6d5df0}));
+    [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(a=>{const m=new T.Mesh(bx,em);m.scale.set(.2,RF_C,.2);m.position.set(a[0]*RF_H,RF_C/2,a[1]*RF_H);scene.add(m)});
+    const sg=hk.geo(new T.SphereGeometry(.6,24,16));
+    const pl=P.map(p=>{const c=new T.Color(p.col||'#888'),m=new T.Mesh(sg,hk.mat(new T.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:.4,roughness:.4})));m.visible=false;scene.add(m);return m});
+    const ring=new T.Mesh(hk.geo(new T.TorusGeometry(.95,.07,8,32)),hk.mat(new T.MeshBasicMaterial({color:0xffffff})));ring.rotation.x=Math.PI/2;scene.add(ring);
+    const og=hk.geo(new T.IcosahedronGeometry(.45,0));
+    const mk=(c,e,i,tr)=>hk.mat(new T.MeshStandardMaterial({color:c,emissive:e,emissiveIntensity:i,transparent:tr,opacity:tr?.35:1}));
+    const m1l=mk(0x22d3ee,0x0e7490,1,false),m1d=mk(0x22d3ee,0x0e7490,.1,true),m3l=mk(0xf43f8e,0x9d174d,1,false),m3d=mk(0xf43f8e,0x9d174d,.1,true);
+    const orbs=[];for(let k=0;k<12;k++){const m=new T.Mesh(og,m1l);m.visible=false;scene.add(m);orbs.push(m)}
+    const cam=new T.PerspectiveCamera(55,asp,.1,120);cam.position.set(0,RF_C/2+7,24);cam.lookAt(0,RF_C/2,0);let tm=0;
+    return{cam,update(w,dt){tm+=dt;
+      w.players.forEach((q,i)=>{const m=pl[i];if(!m)return;if(q.x===undefined){m.visible=false;return}m.visible=true;const cy=rfCy(q);m.position.set(q.x,cy,q.z);if(i===you)ring.position.set(q.x,cy,q.z)});
+      orbs.forEach((m,k)=>{const o=w.orbs[k];if(!o){m.visible=false;return}const lit=(o.age%6)<4;m.visible=true;
+        m.material=o.v>1?(lit?m3l:m3d):(lit?m1l:m1d);m.scale.setScalar((o.v>1?1.3:1)*(lit?1:.7));m.position.set(o.x,o.y+Math.sin(tm*3+k)*.12,o.z);m.rotation.y+=dt*2;m.rotation.x+=dt})}}}};
+
 /* ---------- registry (add new games here) ---------- */
 const GAMES=[
  {id:'ttt',title:'Tic-Tac-Toe',cat:'Board',mode:'Solo vs AI',added:5,quick:1,glyph:'✕ ○',grad:'linear-gradient(135deg,#7c3aed,#22d3ee)',goal:'Win a round against the AI',how:'Get three in a row. You are X. On Hard the AI never loses, so a draw is a great result.',mount:ttt},
